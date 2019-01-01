@@ -396,7 +396,7 @@ state_open(ngx_str_t *state_file)
 
     f = fopen((const char *) path, "w+");
     if (f == NULL)
-        ngx_log_error(NGX_LOG_WARN, ngx_cycle->log, 0, "can't open file: %V",
+        ngx_log_error(NGX_LOG_WARN, ngx_cycle->log, 0, "can't open file: %s",
                       &path);
 
     return f;

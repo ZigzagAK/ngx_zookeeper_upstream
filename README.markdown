@@ -20,7 +20,7 @@ http {
     zookeeper_sync_file conf/app1.peers;
     zookeeper_sync_lock /instances/apps/.locks/app1;
 
-    dns_update 10s;
+    dns_update 60s;
     dns_add_down on;
 
     check passive type=http rise=2 fall=2 timeout=5000 interval=10;
@@ -37,7 +37,7 @@ http {
     zookeeper_sync_path /instances/apps/app2/nodes;
     zookeeper_sync_file conf/app2.peers;
 
-    dns_update 10s;
+    dns_update 60s;
     dns_add_down on;
 
     check passive type=http rise=2 fall=2 timeout=5000 interval=10;
