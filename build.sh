@@ -224,6 +224,7 @@ function build_release() {
                 --with-cc-opt="$ADDITIONAL_INCLUDES" \
                 --with-ld-opt="$ADDITIONAL_LIBS" \
                 --add-module=../ngx_dynamic_upstream \
+                --add-module=../ngx_dynamic_healthcheck \
                 --add-module=../.. >> $BUILD_LOG 2>>$ERR_LOG
 
     r=$?
@@ -318,6 +319,7 @@ function download() {
   download_dep http://zlib.net                                                     zlib      $ZLIB_VERSION      tar.gz
 
   download_module ZigzagAK    ngx_dynamic_upstream             master
+  download_module ZigzagAK    ngx_dynamic_healthcheck          master
 
   cd ..
 }

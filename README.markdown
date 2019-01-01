@@ -5,6 +5,8 @@ ngx_zookeeper_upstream - Upstream synced with Zookeeper.
 
 # Quick Start
 
+## Nginx config
+
 ```nginx
 http {
   zookeeper_upstream                  127.0.0.1:2181;
@@ -19,7 +21,12 @@ http {
     zookeeper_sync_lock /instances/apps/.locks/app1;
 
     dns_update 10s;
-    dns_add_down off;
+    dns_add_down on;
+
+    check passive type=http rise=2 fall=2 timeout=5000 interval=10;
+    check_request_uri GET /health;
+    check_response_codes 200;
+    check_response_body alive;
 
     include app1.peers;
   }
@@ -31,9 +38,72 @@ http {
     zookeeper_sync_file conf/app2.peers;
 
     dns_update 10s;
-    dns_add_down off;
+    dns_add_down on;
+
+    check passive type=http rise=2 fall=2 timeout=5000 interval=10;
+    check_request_uri GET /health;
+    check_response_codes 200;
+    check_response_body alive;
 
     include app2.peers;
   }
+
+  server {
+    listen 6000;
+
+    location /dynamic {
+      dynamic_upstream;
+    }
+  }
+
+  server {
+    # app1
+    listen 8001;
+    listen 8002;
+
+    #app2
+    listen 9001;
+    listen 9002;
+
+    location = /health {
+      return 200 'alive';
+    }
+
+    location / {
+      return 200 'hello';
+    }
+  }
+
+  server {
+    listen 10000;
+
+    location /app1 {
+      proxy_pass http://app1;
+    }
+
+    location /app2 {
+      proxy_pass http://app2;
+    }
+  }
+
+  server {
+    listen 8888;
+
+    location /dynamic {
+      dynamic_upstream;
+    }
+
+    location /healthcheck/get {
+      healthcheck_get;
+    }
+
+    location /healthcheck/status {
+      healthcheck_status;
+    }
+  }
 }
 ````
+
+## Zookeeper structure
+
+![Zookeeper structure](zoo.png)
