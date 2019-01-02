@@ -418,14 +418,18 @@ ngx_zookeeper_upstream_save(ngx_zookeeper_srv_conf_t *cfg)
         return;
 
     primary = cfg->uscf->peer.data;
-
+    
     ngx_rwlock_rlock(&primary->rwlock);
 
-    for (peers = primary; peers && j < 2; peers = peers->next, j++) {
+    for (peers = primary;
+         peers && j < 2;
+         peers = peers->next, j++) {
 
         ngx_str_null(&server);
 
-        for (peer = peers->peer; peer; peer = peer->next) {
+        for (peer = peers->peer;
+             peer;
+             peer = peer->next) {
 
             if (ngx_memn2cmp(peer->server.data, server.data,
                              peer->server.len, server.len) != 0) {
@@ -443,9 +447,9 @@ ngx_zookeeper_upstream_save(ngx_zookeeper_srv_conf_t *cfg)
         }
     }
 
-    fclose(f);
-
     ngx_rwlock_unlock(&primary->rwlock);
+
+    fclose(f);
 }
 
 
@@ -534,26 +538,30 @@ ngx_zookeeper_upstream_exit_worker(ngx_cycle_t *cycle)
 
 static ngx_flag_t
 ngx_zookeeper_exists(ngx_http_upstream_rr_peers_t *primary,
-    const char *name)
+    ngx_str_t *name)
 {
-    ngx_http_upstream_rr_peer_t   *peer;
-    ngx_http_upstream_rr_peers_t  *peers;
-    ngx_uint_t                     j = 0;
+    ngx_http_upstream_rr_peer_t  *peer;
+    ngx_http_upstream_rr_peers_t *peers;
+    ngx_uint_t                    j = 0;
 
     ngx_rwlock_rlock(&primary->rwlock);
 
-    for (peers = primary; peers && j < 2; peers = peers->next, j++) {
+    for (peers = primary;
+         peers && j < 2;
+         peers = peers->next, j++) {
 
-        for (peer = peers->peer; peer; peer = peer->next) {
+        for (peer = peers->peer;
+             peer;
+             peer = peer->next) {
 
-            if (ngx_memn2cmp(peer->server.data, (u_char *) name,
-                             peer->server.len, strlen(name)) == 0) {
+            if (ngx_memn2cmp(peer->server.data, name->data,
+                             peer->server.len, name->len) == 0) {
                 ngx_rwlock_unlock(&primary->rwlock);
                 return 1;
             }
 
-            if (ngx_memn2cmp(peer->name.data, (u_char *) name,
-                             peer->name.len, strlen(name)) == 0) {
+            if (ngx_memn2cmp(peer->name.data, name->data,
+                             peer->name.len, name->len) == 0) {
                 ngx_rwlock_unlock(&primary->rwlock);
                 return 1;
             }
@@ -568,51 +576,61 @@ ngx_zookeeper_exists(ngx_http_upstream_rr_peers_t *primary,
 
 static void
 ngx_zookeeper_op_defaults(ngx_dynamic_upstream_op_t *op,
-    ngx_str_t *upstream, const char *name, int operation)
+    ngx_str_t *upstream, ngx_str_t *server, ngx_str_t *name, int operation)
 {
     ngx_memzero(op, sizeof(ngx_dynamic_upstream_op_t));
 
     op->op = operation;
+    op->err = "unknown";
 
     op->status = NGX_HTTP_OK;
     op->down = 1;
 
     op->op_param |= NGX_DYNAMIC_UPSTEAM_OP_PARAM_RESOLVE_SYNC;
 
-    op->server.data = (u_char *) name;
-    op->server.len = ngx_strlen(op->server.data);
+    op->server.data = server->data;
+    op->server.len = server->len;
+
+    if (name != NULL) {
+        op->name.data = name->data;
+        op->name.len = name->len;
+    }
 
     op->upstream.data = upstream->data;
     op->upstream.len = upstream->len;
 }
 
+static void
+ngx_zookeeper_op_defaults_locked(ngx_dynamic_upstream_op_t *op,
+    ngx_str_t *upstream, ngx_str_t *server, ngx_str_t *name, int operation)
+{
+    ngx_zookeeper_op_defaults(op, upstream, server, name, operation);
+    op->no_lock = 1;
+}
+
 
 static void
 ngx_zookeeper_remove_obsoleted(ngx_http_upstream_srv_conf_t *uscf,
-    ngx_http_upstream_rr_peers_t *primary, const struct String_vector *names)
+    const struct String_vector *names)
 {
     ngx_http_upstream_rr_peer_t   *peer;
-    ngx_http_upstream_rr_peers_t  *peers;
+    ngx_http_upstream_rr_peers_t  *peers, *primary;
     ngx_uint_t                     j = 0;
     ngx_dynamic_upstream_op_t      op;
-    ngx_pool_t                    *pool;
-    ngx_array_t                   *obsoleted;
-    ngx_str_t                     *name;
     ngx_int_t                      i;
+    static ngx_str_t               noaddr = ngx_string("0.0.0.0:1");
 
-    pool = ngx_create_pool(1024, ngx_cycle->log);
-    if (pool == NULL)
-        return;
+    primary = uscf->peer.data;
+    
+    ngx_rwlock_wlock(&primary->rwlock);
 
-    obsoleted = ngx_array_create(pool, 100, sizeof(ngx_str_t));
-    if (obsoleted == NULL)
-        goto nomem;
+    for (peers = primary;
+         peers && j < 2;
+         peers = peers->next, j++) {
 
-    ngx_rwlock_rlock(&primary->rwlock);
-
-    for (peers = primary; peers && j < 2; peers = peers->next, j++) {
-
-        for (peer = peers->peer; peer; peer = peer->next) {
+        for (peer = peers->peer;
+             peer;
+             peer = peer->next) {
 
             for (i = 0; i < names->count; i++) {
 
@@ -626,47 +644,35 @@ ngx_zookeeper_remove_obsoleted(ngx_http_upstream_srv_conf_t *uscf,
             }
 
             if (i == names->count) {
-                name = ngx_array_push(obsoleted);
-                if (name == NULL)
-                    goto nomem;
-                name->len = peer->name.len;
-                name->data = ngx_pcalloc(pool, name->len + 1);
-                if (name->data == NULL)
-                    goto nomem;
-                ngx_memcpy(name->data, peer->name.data, name->len);
+
+again:
+
+                ngx_zookeeper_op_defaults_locked(&op, &uscf->host,
+                    &peer->server, &peer->name, NGX_DYNAMIC_UPSTEAM_OP_REMOVE);
+
+                if (ngx_dynamic_upstream_op(ngx_cycle->log, &op, uscf)
+                        == NGX_ERROR) {
+
+                    if (op.status == NGX_HTTP_BAD_REQUEST) {
+
+                        ngx_zookeeper_op_defaults_locked(&op, &uscf->host,
+                            &noaddr, &noaddr, NGX_DYNAMIC_UPSTEAM_OP_ADD);
+
+                        ngx_dynamic_upstream_op(ngx_cycle->log, &op,
+                            uscf);
+
+                        if (ngx_strcmp(noaddr.data, peer->name.data) != 0)
+                            goto again;
+                    } else
+                        ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0,
+                                      "Zookeeper upstream: [%V] %s",
+                                      &op.upstream, op.err);
+                }
             }
         }
     }
 
     ngx_rwlock_unlock(&primary->rwlock);
-
-    name = obsoleted->elts;
-
-    for (j = 0; j < obsoleted->nelts; j++) {
-
-again:
-
-        ngx_zookeeper_op_defaults(&op, &uscf->host, (const char *) name[j].data,
-            NGX_DYNAMIC_UPSTEAM_OP_REMOVE);
-
-        if (ngx_dynamic_upstream_op(ngx_cycle->log, &op, uscf)
-                == NGX_ERROR) {
-            if (op.status == NGX_HTTP_BAD_REQUEST) {
-                ngx_zookeeper_op_defaults(&op, &uscf->host, "0.0.0.0:1",
-                    NGX_DYNAMIC_UPSTEAM_OP_ADD);
-                ngx_dynamic_upstream_op(ngx_cycle->log, &op, uscf);
-                if (ngx_strcmp("0.0.0.0:1", name[j].data) != 0)
-                    goto again;
-            } else
-                ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0,
-                              "Zookeeper upstream: [%V] %s", &op.upstream,
-                              op.err ? op.err : "unknown");
-        }
-    }
-
-nomem:
-
-    ngx_destroy_pool(pool);
 }
 
 
@@ -674,9 +680,10 @@ static void
 ngx_zookeeper_sync_upstream_ready(int rc, const struct String_vector *names,
     const void *ctx)
 {
-    ngx_zookeeper_srv_conf_t  *cfg = (ngx_zookeeper_srv_conf_t *) ctx;
-    int32_t                    j;
-    ngx_dynamic_upstream_op_t  op;
+    ngx_zookeeper_srv_conf_t      *cfg = (ngx_zookeeper_srv_conf_t *) ctx;
+    int32_t                        j;
+    ngx_dynamic_upstream_op_t      op;
+    ngx_str_t                      server;
 
     if (rc != ZOK) {
 
@@ -689,10 +696,13 @@ ngx_zookeeper_sync_upstream_ready(int rc, const struct String_vector *names,
 
     for (j = 0; j < names->count; j++) {
 
-        if (!ngx_zookeeper_exists(cfg->uscf->peer.data, names->data[j])) {
+        server.data = (u_char *) names->data[j];
+        server.len = ngx_strlen(server.data);
 
-            ngx_zookeeper_op_defaults(&op, &cfg->uscf->host, names->data[j],
-                NGX_DYNAMIC_UPSTEAM_OP_ADD);
+        if (!ngx_zookeeper_exists(cfg->uscf->peer.data, &server)) {
+
+            ngx_zookeeper_op_defaults(&op, &cfg->uscf->host, &server,
+                NULL, NGX_DYNAMIC_UPSTEAM_OP_ADD);
 
             if (ngx_dynamic_upstream_op(ngx_cycle->log, &op, cfg->uscf)
                     == NGX_ERROR) {
@@ -703,7 +713,7 @@ ngx_zookeeper_sync_upstream_ready(int rc, const struct String_vector *names,
         }
     }
 
-    ngx_zookeeper_remove_obsoleted(cfg->uscf, cfg->uscf->peer.data, names);
+    ngx_zookeeper_remove_obsoleted(cfg->uscf, names);
 
     if (cfg->zscf->lock.data == NULL)
         cfg->epoch = zoo.epoch;

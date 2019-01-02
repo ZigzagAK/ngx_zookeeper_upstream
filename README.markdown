@@ -13,6 +13,8 @@ http {
   zookeeper_upstream_log_level        debug;
   zookeeper_upstream_recv_timeout     5000;
 
+  healthcheck_buffer_size 128k;
+
   upstream app1 {
     zone shm_app1 128k;
 
