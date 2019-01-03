@@ -5,6 +5,7 @@
 
 
 #include "ngx_dynamic_upstream_module.h"
+#include "ngx_zookeeper_upstream.h"
 
 
 static void *
@@ -244,6 +245,27 @@ static zookeeper_t zoo = {
     .epoch     = 1,
     .cfg       = NULL
 };
+
+
+ngx_flag_t
+ngx_zookeeper_upstream_connected()
+{
+    return zoo.connected;
+}
+
+
+int
+ngx_zookeeper_upstream_epoch()
+{
+    return zoo.epoch;
+}
+
+
+void *
+ngx_zookeeper_upstream_handle()
+{
+    return zoo.handle;
+}
 
 
 static void
