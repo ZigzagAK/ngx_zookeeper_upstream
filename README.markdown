@@ -19,7 +19,7 @@ http {
     zone shm_app1 128k;
 
     zookeeper_sync_path /instances/apps/app1/nodes;
-    zookeeper_sync_file conf/app1.peers;
+    zookeeper_sync_file app1.peers;
     zookeeper_sync_lock /instances/apps/.locks/app1;
 
     dns_update 60s;
@@ -29,15 +29,13 @@ http {
     check_request_uri GET /health;
     check_response_codes 200;
     check_response_body alive;
-
-    include app1.peers;
   }
 
   upstream app2 {
     zone shm_app2 128k;
 
     zookeeper_sync_path /instances/apps/app2/nodes;
-    zookeeper_sync_file conf/app2.peers;
+    zookeeper_sync_file app2.peers;
 
     dns_update 60s;
     dns_add_down on;
@@ -46,8 +44,6 @@ http {
     check_request_uri GET /health;
     check_response_codes 200;
     check_response_body alive;
-
-    include app2.peers;
   }
 
   server {
@@ -72,12 +68,15 @@ http {
     }
 
     location / {
+      access_log off;
       return 200 'hello';
     }
   }
 
   server {
     listen 10000;
+
+    access_log off;
 
     location /app1 {
       proxy_pass http://app1;

@@ -386,22 +386,14 @@ session_watcher(zhandle_t *zh,
 
 
 static FILE *
-state_open(ngx_str_t *working_directory,
-    ngx_str_t *state_file, const char *mode)
+state_open(ngx_str_t *state_file, const char *mode)
 {
-    u_char            path[10240];
-    FILE             *f;
+    FILE  *f;
 
-    if (working_directory && working_directory->len != 0)
-        ngx_snprintf(path, 10240, "%V/%V\0",
-                     working_directory, state_file);
-    else
-        ngx_snprintf(path, 10240, "%V", state_file);
-
-    f = fopen((const char *) path, mode);
+    f = fopen((const char *) state_file->data, mode);
     if (f == NULL)
-        ngx_log_error(NGX_LOG_WARN, ngx_cycle->log, 0, "can't open file: %s",
-                      &path);
+        ngx_log_error(NGX_LOG_WARN, ngx_cycle->log, 0, "can't open file: %V",
+                      state_file);
 
     return f;
 }
@@ -410,30 +402,30 @@ state_open(ngx_str_t *working_directory,
 static char *
 ngx_create_upsync_file(ngx_conf_t *cf, void *post, void *data)
 {
-    ngx_str_t        *fname = data;
-    FILE             *f;
-    ngx_core_conf_t  *ccf;
+    ngx_str_t  *fname = data;
+    FILE       *f;
 
-    static const char default_server[] = "server 0.0.0.0:1 down;";
+    static const ngx_str_t
+        default_server = ngx_string("server 0.0.0.0:1 down;");
 
-    ccf = (ngx_core_conf_t *)
-        ngx_get_conf(cf->cycle->conf_ctx, ngx_core_module);
+    if (ngx_conf_full_name(cf->cycle, fname, 1) != NGX_OK)
+        return NGX_CONF_ERROR;
 
-    f = state_open(&ccf->working_directory, fname, "r");
+    f = state_open(fname, "r");
     if (f != NULL) {
         fclose(f);
-        return NGX_CONF_OK;
+        return ngx_conf_include(cf, NULL, NULL);
     }
 
-    f = state_open(&ccf->working_directory, fname, "w+");
+    f = state_open(fname, "w+");
     if (f == NULL)
         return NGX_CONF_ERROR;
 
-    fwrite(default_server, sizeof(default_server) - 1, 1, f);
+    fwrite(default_server.data, default_server.len, 1, f);
 
     fclose(f);
 
-    return NGX_CONF_OK;
+    return ngx_conf_include(cf, NULL, NULL);
 }
 
 
@@ -446,12 +438,8 @@ ngx_zookeeper_upstream_save(ngx_zookeeper_srv_conf_t *cfg)
     u_char                         srv[10240], *c;
     FILE                          *f;
     ngx_str_t                      server;
-    ngx_core_conf_t               *ccf;
 
-    ccf = (ngx_core_conf_t *)
-        ngx_get_conf(ngx_cycle->conf_ctx, ngx_core_module);
-
-    f = state_open(&ccf->working_directory, &cfg->zscf->file, "w+");
+    f = state_open(&cfg->zscf->file, "w+");
     if (f == NULL)
         return;
 
