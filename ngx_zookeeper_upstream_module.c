@@ -1059,19 +1059,29 @@ ngx_zookeeper_sync_upstream_host(int rc, const char *body, int len,
 
 again:
 
-    switch(ngx_dynamic_upstream_op(ngx_cycle->log, &op, ctx->cfg->uscf)) {
+    switch (ngx_dynamic_upstream_op(ngx_cycle->log, &op, ctx->cfg->uscf)) {
 
         case NGX_OK:
             if (op.status == NGX_HTTP_NOT_MODIFIED) {
 
                 op.op = NGX_DYNAMIC_UPSTEAM_OP_PARAM;
-                op.status = NGX_HTTP_OK;
-                op.err = "unknown";
                 goto again;
             }
             break;
 
         case NGX_ERROR:
+            if (op.status == NGX_HTTP_PRECONDITION_FAILED) {
+
+                op.op = NGX_DYNAMIC_UPSTEAM_OP_REMOVE;
+
+                if (ngx_dynamic_upstream_op(ngx_cycle->log, &op,
+                        ctx->cfg->uscf) == NGX_OK) {
+
+                    op.op = NGX_DYNAMIC_UPSTEAM_OP_ADD;
+                    goto again;
+                }
+            }
+
         default:
             ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0,
                           "Zookeeper upstream: [%V] add server, %s",
