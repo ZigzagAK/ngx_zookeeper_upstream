@@ -909,7 +909,9 @@ ngx_zookeeper_sync_watch(zhandle_t *zh, int type,
 {
     ngx_zookeeper_srv_conf_t  *cfg = ctx;
 
-    if (type == ZOO_CHILD_EVENT || type == ZOO_CHANGED_EVENT) {
+    if (type == ZOO_CHILD_EVENT
+        || type == ZOO_CHANGED_EVENT
+        || type == ZOO_DELETED_EVENT) {
 
         ngx_log_error(NGX_LOG_INFO, ngx_cycle->log, 0,
                       "Zookeeper upstream: [%V] changed", &cfg->uscf->host);
@@ -1138,8 +1140,7 @@ ngx_zookeeper_sync_upstream_childrens(int rc, const struct String_vector *names,
                       "Zookeeper upstream: [%V] no nodes", &cfg->uscf->host);
 
         cfg->busy = 0;
-        if (cfg->zscf->lock.data == NULL)
-            cfg->epoch = zoo.epoch;
+        cfg->epoch = zoo.epoch;
         return;
     }
 
@@ -1245,18 +1246,28 @@ ngx_zookeeper_sync_upstream_locked(int rc, const struct Stat *stat,
 {
     ngx_zookeeper_srv_conf_t  *cfg = (ngx_zookeeper_srv_conf_t *) ctx;
 
-    if (rc == ZOK) {
+    if (rc == ZNONODE) {
 
-        cfg->epoch = 0;
-        cfg->busy = 0;
+        ngx_zookeeper_sync_upstream(cfg);
+        return;
+    }
+
+    if (rc == ZOK) {
 
         ngx_log_error(NGX_LOG_DEBUG, ngx_cycle->log, 0,
                       "Zookeeper upstream: [%V] locked, path=%V",
                       &cfg->uscf->host, &cfg->zscf->lock);
+
+        cfg->epoch = zoo.epoch;
+        cfg->busy = 0;
         return;
     }
 
-    ngx_zookeeper_sync_upstream(cfg);
+    ngx_log_error(NGX_LOG_WARN, ngx_cycle->log, 0,
+                  "Zookeeper upstream: [%V] locked, path=%V, %s",
+                  &cfg->uscf->host, &cfg->zscf->lock, zerror(rc));
+
+    cfg->busy = 0;
 }
 
 
@@ -1279,8 +1290,8 @@ ngx_zookeeper_sync_update(ngx_zookeeper_srv_conf_t *cfg)
     if (cfg->zscf->lock.data == NULL)
         return ngx_zookeeper_sync_upstream(cfg);
 
-    rc = zoo_aexists(zoo.handle, (const char *) cfg->zscf->lock.data,
-        0, ngx_zookeeper_sync_upstream_locked, cfg);
+    rc = zoo_awexists(zoo.handle, (const char *) cfg->zscf->lock.data,
+        ngx_zookeeper_sync_watch, cfg, ngx_zookeeper_sync_upstream_locked, cfg);
 
     if (rc != ZOK) {
 
