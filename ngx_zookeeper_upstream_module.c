@@ -429,7 +429,7 @@ ngx_zookeeper_upstream_handle()
 static void
 ngx_log_message(const char *s)
 {
-    ngx_log_debug0(NGX_LOG_DEBUG_HTTP, ngx_cycle->log, 0, s);
+    ngx_log_error(NGX_LOG_DEBUG, ngx_cycle->log, 0, s);
 }
 
 
