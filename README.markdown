@@ -19,8 +19,50 @@ http {
     zone shm_app1 128k;
 
     zookeeper_sync_path /instances/apps/app1/nodes;
-    zookeeper_sync_file app1.peers;
     zookeeper_sync_lock /instances/apps/.locks/app1;
+
+    zookeeper_sync_params @params max_conns=33 max_fails=1 fail_timeout=30s;
+    zookeeper_sync_file app1.peers;
+
+    dns_update 60s;
+    dns_add_down on;
+
+    check passive type=http rise=2 fall=2 timeout=5000 interval=10;
+    check_request_uri GET /health;
+    check_response_codes 200;
+    check_response_body alive;
+  }
+
+  upstream app1-@dc1 {
+    zone shm_app1-dc1 128k;
+
+    zookeeper_sync_path /instances/apps/app1/nodes;
+    zookeeper_sync_lock /instances/apps/.locks/app1-@dc1;
+
+    zookeeper_sync_filter @dc1;
+
+    zookeeper_sync_params @params max_conns=10 max_fails=1 fail_timeout=30s;
+    zookeeper_sync_file app1-@dc1.peers;
+
+    dns_update 60s;
+    dns_add_down on;
+
+    check passive type=http rise=2 fall=2 timeout=5000 interval=10;
+    check_request_uri GET /health;
+    check_response_codes 200;
+    check_response_body alive;
+  }
+
+  upstream app1-@dc2 {
+    zone shm_app1-dc2 128k;
+
+    zookeeper_sync_path /instances/apps/app1/nodes;
+    zookeeper_sync_lock /instances/apps/.locks/app1-@dc2;
+
+    zookeeper_sync_filter @dc2;
+
+    zookeeper_sync_params @params max_conns=10 max_fails=1 fail_timeout=30s;
+    zookeeper_sync_file app1-@dc2.peers;
 
     dns_update 60s;
     dns_add_down on;
@@ -35,6 +77,8 @@ http {
     zone shm_app2 128k;
 
     zookeeper_sync_path /instances/apps/app2/nodes;
+
+    zookeeper_sync_params @params max_conns=20 max_fails=1 fail_timeout=30s;
     zookeeper_sync_file app2.peers;
 
     dns_update 60s;
@@ -82,6 +126,14 @@ http {
       proxy_pass http://app1;
     }
 
+    location /app1/dc1 {
+      proxy_pass http://app1-@dc1;
+    }
+
+    location /app1/dc2 {
+      proxy_pass http://app1-@dc2;
+    }
+
     location /app2 {
       proxy_pass http://app2;
     }
@@ -107,4 +159,11 @@ http {
 
 ## Zookeeper structure
 
-![Zookeeper structure](zoo.png)
+### 1
+![Zookeeper structure1](zoo1.png)
+
+### 2
+![Zookeeper structure2](zoo2.png)
+
+### 3
+![Zookeeper structure3](zoo3.png)
