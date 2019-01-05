@@ -50,6 +50,7 @@ typedef struct
 {
     ngx_str_t  path;
     ngx_str_t  lock;
+    ngx_str_t  lock_path;
     ngx_str_t  file;
     ngx_str_t  params_tag;
     ngx_str_t  filter;
@@ -699,6 +700,7 @@ ngx_http_zookeeper_upstream_post_conf(ngx_conf_t *cf)
     ngx_http_upstream_srv_conf_t            **uscf;
     ngx_http_zookeeper_upstream_main_conf_t  *zmcf;
     ngx_uint_t                                j;
+    ngx_str_t                                *lock;
 
     umcf = ngx_http_conf_get_module_main_conf(cf,
         ngx_http_upstream_module);
@@ -720,10 +722,30 @@ ngx_http_zookeeper_upstream_post_conf(ngx_conf_t *cf)
     uscf = (ngx_http_upstream_srv_conf_t **) umcf->upstreams.elts;
 
     for (j = 0; j < umcf->upstreams.nelts; j++) {
+
         zoo.cfg[j].uscf = uscf[j];
         zoo.cfg[j].zscf = ngx_http_conf_upstream_srv_conf(uscf[j],
             ngx_zookeeper_upstream_module);
+
         if (zoo.cfg[j].zscf->path.data != NULL && uscf[j]->shm_zone != NULL) {
+
+            if (zoo.cfg[j].zscf->lock.data != NULL) {
+
+                zoo.cfg[j].zscf->lock_path = zoo.cfg[j].zscf->lock;
+                lock = &zoo.cfg[j].zscf->lock;
+
+                lock->len = lock->len + cf->cycle->hostname.len + 1;
+                lock->data = ngx_pcalloc(cf->pool, lock->len + 1);
+                if (lock->data == NULL) {
+                    ngx_log_error(NGX_LOG_INFO, ngx_cycle->log, 0,
+                        "Zookeeper upstream: no memory");
+                    return NGX_ERROR;
+                }
+
+                ngx_snprintf(lock->data, lock->len + 1,
+                    "%V/%V", &zoo.cfg[j].zscf->lock_path, &cf->cycle->hostname);
+            }
+
             ngx_log_error(NGX_LOG_INFO, ngx_cycle->log, 0,
                           "Zookeeper upstream: [%V] sync on", &uscf[j]->host);
         } else
@@ -916,6 +938,7 @@ ngx_zookeeper_sync_watch(zhandle_t *zh, int type,
         ngx_log_error(NGX_LOG_INFO, ngx_cycle->log, 0,
                       "Zookeeper upstream: [%V] changed", &cfg->uscf->host);
         cfg->epoch = 0;
+        ngx_msleep(100);
         ngx_zookeeper_sync_update(cfg);
     }
 }
@@ -977,7 +1000,7 @@ parse_body(ngx_pool_t *pool, const char *body, int len)
 
 
 static void
-ngx_zookeeper_sync_lock(int rc, const char *value, const void *ctx)
+ngx_zookeeper_sync_lock(int rc, const char *dummy, const void *ctx)
 {
     ngx_zookeeper_srv_conf_t  *cfg = (ngx_zookeeper_srv_conf_t *) ctx;
 
@@ -1251,7 +1274,7 @@ ngx_zookeeper_sync_upstream(ngx_zookeeper_srv_conf_t *cfg)
 
 
 static void
-ngx_zookeeper_sync_upstream_locked(int rc, const struct Stat *stat,
+ngx_zookeeper_sync_upstream_locked(int rc, const struct Stat *dummy,
     const void *ctx)
 {
     ngx_zookeeper_srv_conf_t  *cfg = (ngx_zookeeper_srv_conf_t *) ctx;
@@ -1281,6 +1304,94 @@ ngx_zookeeper_sync_upstream_locked(int rc, const struct Stat *stat,
 }
 
 
+static void
+ensure_zpath_ready(int rc, const char *dummy, const void *ctx)
+{
+    ngx_str_t  *path = (ngx_str_t *) ctx;
+
+    if (rc != ZOK && rc != ZNODEEXISTS)
+        ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0,
+                      "Zookeeper upstream: error create path: %V, %s",
+                      path, zerror(rc));
+
+    ngx_free(path->data);
+    ngx_free(path);
+}
+
+
+static void
+ensure_zpath(const ngx_str_t *path)
+{
+    u_char     *s2;
+    ngx_str_t  *sub;
+
+    for (s2 = path->data + 1;
+         s2 <= path->data + path->len;
+         s2++) {
+
+        if (*s2 == '/' || *s2 == 0) {
+
+            sub = ngx_calloc(sizeof(ngx_str_t), ngx_cycle->log);
+            if (sub == NULL)
+                goto nomem;
+
+            sub->data = ngx_calloc(s2 - path->data + 1, ngx_cycle->log);
+            if (sub->data == NULL)
+                goto nomem;
+            sub->len = s2 - path->data;
+            ngx_memcpy(sub->data, path->data, sub->len);
+
+            zoo_acreate(zoo.handle, (const char *) sub->data, "", 0,
+                &ZOO_OPEN_ACL_UNSAFE, 0, ensure_zpath_ready, sub);
+        }
+    }
+
+    return;
+
+nomem:
+
+    ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0,
+                  "Zookeeper upstream: no memory");
+}
+
+
+static void
+ensure_lock_path_ready(int rc, const struct Stat *dummy,
+    const void *ctx)
+{
+    ngx_zookeeper_srv_conf_t  *cfg = (ngx_zookeeper_srv_conf_t *) ctx;
+
+    if (rc == ZOK || rc == ZNODEEXISTS)
+        goto cont;
+
+    if (rc == ZNONODE) {
+
+        cfg->busy = 0;
+        return ensure_zpath(&cfg->zscf->lock_path);
+    }
+
+    ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0,
+                  "Zookeeper upstream: error create path: %V, %s",
+                  &cfg->zscf->lock_path, zerror(rc));
+
+    cfg->busy = 0;
+    return;
+
+cont:
+
+    rc = zoo_awexists(zoo.handle, (const char *) cfg->zscf->lock.data,
+        ngx_zookeeper_sync_watch, cfg, ngx_zookeeper_sync_upstream_locked, cfg);
+
+    if (rc != ZOK) {
+
+        ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0,
+                      "Zookeeper upstream: [%V] update, %s",
+                      &cfg->uscf->host, zerror(rc));
+        cfg->busy = 0;
+    }
+}
+
+
 static ngx_int_t
 ngx_zookeeper_sync_update(ngx_zookeeper_srv_conf_t *cfg)
 {
@@ -1300,11 +1411,10 @@ ngx_zookeeper_sync_update(ngx_zookeeper_srv_conf_t *cfg)
     if (cfg->zscf->lock.data == NULL)
         return ngx_zookeeper_sync_upstream(cfg);
 
-    rc = zoo_awexists(zoo.handle, (const char *) cfg->zscf->lock.data,
-        ngx_zookeeper_sync_watch, cfg, ngx_zookeeper_sync_upstream_locked, cfg);
+    rc = zoo_aexists(zoo.handle, (const char *) cfg->zscf->lock_path.data,
+        0, ensure_lock_path_ready, cfg);
 
     if (rc != ZOK) {
-
         ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0,
                       "Zookeeper upstream: [%V] update, %s",
                       &cfg->uscf->host, zerror(rc));
