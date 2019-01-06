@@ -71,6 +71,11 @@ static ngx_conf_num_bounds_t  ngx_http_zookeeper_check_timeout = {
     1, 60000
 };
 
+
+static char *
+zookeeper_sync_unlock(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+
+
 static ngx_command_t ngx_http_zookeeper_upstream_commands[] = {
 
     { ngx_string("zookeeper_upstream"),
@@ -127,6 +132,13 @@ static ngx_command_t ngx_http_zookeeper_upstream_commands[] = {
       ngx_conf_set_str_slot,
       NGX_HTTP_SRV_CONF_OFFSET,
       offsetof(ngx_http_zookeeper_upstream_srv_conf_t, filter),
+      NULL },
+
+    { ngx_string("zookeeper_sync_unlock"),
+      NGX_HTTP_LOC_CONF|NGX_CONF_NOARGS,
+      zookeeper_sync_unlock,
+      0,
+      0,
       NULL },
 
     ngx_null_command
@@ -1440,4 +1452,267 @@ ngx_zookeeper_sync_upstreams()
             ngx_zookeeper_sync_update(&zoo.cfg[j]);
 
     return NGX_OK;
+}
+
+
+static ngx_http_variable_value_t *
+get_var(ngx_http_request_t *r, const char *v)
+{
+    ngx_str_t var = { ngx_strlen(v), (u_char *) v };
+    return ngx_http_get_variable(r, &var, ngx_hash_key(var.data, var.len));
+}
+
+
+static ngx_int_t
+send_response(ngx_http_request_t *r, ngx_uint_t status,
+    const char *text)
+{
+    ngx_http_complex_value_t  cv;
+
+    static ngx_str_t TEXT_PLAIN = ngx_string("text/plain");
+
+    ngx_memzero(&cv, sizeof(ngx_http_complex_value_t));
+
+    cv.value.len = strlen(text);
+    cv.value.data = (u_char *) text;
+
+    return ngx_http_send_response(r, status, &TEXT_PLAIN, &cv);
+}
+
+
+static void
+request_finalize(ngx_http_request_t *r, ngx_uint_t status,
+    const char *text)
+{
+    send_response(r, status, text);
+    ngx_http_finalize_request(r, NGX_DONE);
+}
+
+
+typedef struct {
+    ngx_pool_t          *pool;
+    ngx_atomic_t         count;
+    ngx_str_t            lock_path;
+    const char          *err;
+    ngx_msec_t           timedout;
+} zookeeper_sync_ctx_t;
+
+
+static void
+zookeeper_sync_unlock_deleted(int rc, const void *data)
+{
+    zookeeper_sync_ctx_t  *ctx = (zookeeper_sync_ctx_t *) data;
+
+    if (rc != ZOK && rc != ZNONODE)
+        ctx->err = zerror(rc);
+
+    if (ngx_atomic_fetch_add(&ctx->count, -1) == 1)
+        ngx_destroy_pool(ctx->pool);
+}
+
+
+static void
+zookeeper_sync_unlock_childrens(int rc, const struct String_vector *names,
+    const void *data)
+{
+    zookeeper_sync_ctx_t  *ctx = (zookeeper_sync_ctx_t *) data;
+    int32_t                j;
+    ngx_str_t              path;
+
+    if (rc == ZNONODE)
+        goto cleanup;
+
+    if (rc != ZOK)
+        goto err;
+
+    for (j = 0; j < names->count; j++) {
+
+        path.len = ctx->lock_path.len + strlen(names->data[j]) + 1;
+        path.data = ngx_pcalloc(ctx->pool, path.len + 1);
+        if (path.data == NULL)
+            goto nomem;
+
+        ngx_snprintf(path.data, path.len + 1, "%V/%s", &ctx->lock_path,
+            names->data[j]);
+
+        ngx_atomic_fetch_add(&ctx->count, 1);
+
+        rc = zoo_adelete(zoo.handle, (const char *) path.data, 0,
+            zookeeper_sync_unlock_deleted, ctx);
+
+        if (rc != ZOK) {
+
+            ngx_atomic_fetch_add(&ctx->count, -1);
+            goto err;
+        }
+    }
+
+    goto cleanup;
+
+nomem:
+
+    ctx->err = "no memory";
+    goto cleanup;
+
+err:
+
+    ctx->err = zerror(rc);
+
+cleanup:
+
+    if (ngx_atomic_fetch_add(&ctx->count, -1) == 1)
+        ngx_destroy_pool(ctx->pool);
+}
+
+
+static void
+zookeeper_sync_unlock_ready(ngx_http_request_t *r)
+{
+    zookeeper_sync_ctx_t  *ctx;
+    ngx_flag_t             timedout;
+    ngx_event_t           *wev = r->connection->write;
+
+    ctx = ngx_http_get_module_ctx(r, ngx_zookeeper_upstream_module);
+
+    timedout = ngx_current_msec >= ctx->timedout;
+
+    if (!timedout && ctx->count > 1)
+        return ngx_add_timer(wev, 50);
+
+    if (ngx_handle_write_event(wev, 0) != NGX_OK)
+        return ngx_http_finalize_request(r, NGX_DONE);
+
+    if (ctx->err)
+        return request_finalize(r, NGX_HTTP_SERVICE_UNAVAILABLE, ctx->err);
+
+    if (timedout)
+        return request_finalize(r, NGX_HTTP_GATEWAY_TIME_OUT, "timeout");
+
+    request_finalize(r, NGX_HTTP_OK, "unlocked");
+}
+
+
+static void zookeeper_sync_unlock_cleanup(void *data)
+{
+    zookeeper_sync_ctx_t  *ctx = data;
+
+    if (ngx_atomic_fetch_add(&ctx->count, -1) == 1)
+        ngx_destroy_pool(ctx->pool);
+}
+
+
+static ngx_int_t
+zookeeper_sync_unlock_upstream(ngx_http_request_t *r, ngx_flag_t local,
+    ngx_zookeeper_srv_conf_t *cfg)
+{
+    ngx_pool_t                               *pool;
+    zookeeper_sync_ctx_t                     *ctx;
+    ngx_http_zookeeper_upstream_main_conf_t  *zmcf;
+    ngx_pool_cleanup_t                       *cln;
+    int                                       rc;
+
+    zmcf = ngx_http_get_module_main_conf(r, ngx_zookeeper_upstream_module);
+
+    pool = ngx_create_pool(2048, ngx_cycle->log);
+    if (pool == NULL)
+        goto nomem;
+
+    ctx = ngx_pcalloc(pool, sizeof(zookeeper_sync_ctx_t));
+    if (ctx == NULL)
+        goto nomem;
+
+    cln = ngx_pool_cleanup_add(r->pool, sizeof(ngx_pool_t));
+    if (cln == NULL)
+        goto nomem;
+
+    ctx->pool = pool;
+    ctx->count = 2;
+    ctx->timedout = ngx_current_msec + zmcf->timeout;
+
+    if (local)
+        rc = zoo_adelete(zoo.handle, (const char *) cfg->zscf->lock.data, 0,
+            zookeeper_sync_unlock_deleted, ctx);
+    else {
+
+        ctx->lock_path = cfg->zscf->lock_path;
+        rc = zoo_aget_children(zoo.handle,
+            (const char *) cfg->zscf->lock_path.data, 0,
+            zookeeper_sync_unlock_childrens, ctx);
+    }
+
+    if (rc != ZOK) {
+
+        ngx_destroy_pool(pool);
+        return send_response(r, NGX_HTTP_SERVICE_UNAVAILABLE, zerror(rc));
+    }
+
+    cln->data = ctx;
+    cln->handler = zookeeper_sync_unlock_cleanup;
+
+    r->read_event_handler = ngx_http_test_reading;
+    r->write_event_handler = zookeeper_sync_unlock_ready;
+
+    ngx_http_set_ctx(r, ctx, ngx_zookeeper_upstream_module);
+
+    ngx_add_timer(r->connection->write, 50);
+
+#if defined(nginx_version) && nginx_version >= 8011
+    r->main->count++;
+#endif
+
+    return NGX_DONE;
+
+nomem:
+
+    if (pool != NULL)
+        ngx_destroy_pool(pool);
+    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+        "Zookeeper upstream: no memory");
+
+    return send_response(r, NGX_HTTP_INTERNAL_SERVER_ERROR, "no memory");
+}
+
+
+static ngx_int_t
+zookeeper_sync_unlock_handler(ngx_http_request_t *r)
+{
+    ngx_http_variable_value_t  *upstream;
+    ngx_http_variable_value_t  *local;
+    ngx_uint_t                  j;
+
+    if (r->method != NGX_HTTP_GET)
+        return NGX_HTTP_NOT_ALLOWED;
+
+    upstream = get_var(r, "arg_upstream");
+    local = get_var(r, "arg_local");
+
+    if (upstream->not_found)
+        return send_response(r, NGX_HTTP_BAD_REQUEST,
+            "upstream argument required");
+
+    if (!zoo.connected)
+        return send_response(r, NGX_HTTP_SERVICE_UNAVAILABLE,
+            "zoo not connected");
+
+    for (j = 0; j < zoo.len; j++)
+        if (ngx_memn2cmp(zoo.cfg[j].uscf->host.data, upstream->data,
+                         zoo.cfg[j].uscf->host.len, upstream->len) == 0) {
+            return zookeeper_sync_unlock_upstream(r, !local->not_found,
+                zoo.cfg + j);
+        }
+
+    return send_response(r, NGX_HTTP_BAD_REQUEST, "upstream not found");
+}
+
+
+static char *
+zookeeper_sync_unlock(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
+{
+    ngx_http_core_loc_conf_t  *clcf;
+
+    clcf = (ngx_http_core_loc_conf_t *) ngx_http_conf_get_module_loc_conf(cf,
+        ngx_http_core_module);
+    clcf->handler = zookeeper_sync_unlock_handler;
+
+    return NGX_CONF_OK;
 }

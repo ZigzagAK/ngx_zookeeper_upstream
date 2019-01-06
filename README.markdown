@@ -146,6 +146,12 @@ http {
   server {
     listen 8888;
 
+    # ex1: /unlock?upstream=app1
+    # ex2: /unlock?upstream=app1&local=
+    location /unlock {
+      zookeeper_sync_unlock;
+    }
+
     location /dynamic {
       dynamic_upstream;
     }
