@@ -643,8 +643,10 @@ ngx_zookeeper_upstream_save(ngx_zookeeper_srv_conf_t *cfg)
     }
 
     f = state_open(&cfg->zscf->file, "w+");
-    if (f == NULL)
+    if (f == NULL) {
+        ngx_destroy_pool(pool);
         return;
+    }
 
     primary = cfg->uscf->peer.data;
 
