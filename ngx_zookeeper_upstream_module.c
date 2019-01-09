@@ -737,6 +737,9 @@ ngx_http_zookeeper_upstream_post_conf(ngx_conf_t *cf)
 
     for (j = 0; j < umcf->upstreams.nelts; j++) {
 
+        if (uscf[j]->srv_conf == NULL || uscf[j]->shm_zone == NULL)
+            continue;
+
         zoo.cfg[j].uscf = uscf[j];
         zoo.cfg[j].zscf = ngx_http_conf_upstream_srv_conf(uscf[j],
             ngx_zookeeper_upstream_module);
