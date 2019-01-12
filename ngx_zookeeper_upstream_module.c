@@ -48,12 +48,12 @@ typedef struct
 
 typedef struct
 {
-    ngx_str_t  path;
-    ngx_str_t  lock;
-    ngx_str_t  lock_path;
-    ngx_str_t  file;
-    ngx_str_t  params_tag;
-    ngx_str_t  filter;
+    ngx_array_t  *path;
+    ngx_str_t     lock;
+    ngx_str_t     lock_path;
+    ngx_str_t     file;
+    ngx_str_t     params_tag;
+    ngx_str_t     filter;
 
     ngx_dynamic_upstream_op_t  defaults;
 } ngx_http_zookeeper_upstream_srv_conf_t;
@@ -101,7 +101,7 @@ static ngx_command_t ngx_http_zookeeper_upstream_commands[] = {
 
     { ngx_string("zookeeper_sync_path"),
       NGX_HTTP_UPS_CONF|NGX_CONF_TAKE1,
-      ngx_conf_set_str_slot,
+      ngx_conf_set_str_array_slot,
       NGX_HTTP_SRV_CONF_OFFSET,
       offsetof(ngx_http_zookeeper_upstream_srv_conf_t, path),
       NULL },
@@ -201,6 +201,7 @@ ngx_http_zookeeper_upstream_create_srv_conf(ngx_conf_t *cf)
         return NULL;
 
     ngx_str_set(&zscf->params_tag, "@params");
+    zscf->path = NGX_CONF_UNSET_PTR;
 
     return zscf;
 }
@@ -754,7 +755,7 @@ ngx_http_zookeeper_upstream_post_conf(ngx_conf_t *cf)
         zoo.cfg[j].zscf = ngx_http_conf_upstream_srv_conf(uscf[j],
             ngx_zookeeper_upstream_module);
 
-        if (zoo.cfg[j].zscf->path.data != NULL && uscf[j]->shm_zone != NULL) {
+        if (zoo.cfg[j].zscf->path->nelts != 0 && uscf[j]->shm_zone != NULL) {
 
             if (zoo.cfg[j].zscf->lock.data != NULL) {
 
@@ -876,28 +877,19 @@ ngx_zookeeper_op_defaults_locked(ngx_dynamic_upstream_op_t *op,
 }
 
 
-static ngx_str_t
-ngx_assign_str(const char *s)
-{
-    ngx_str_t str = { strlen(s), (u_char *) s };
-    return str;
-}
-
-
 static void
 ngx_zookeeper_remove_obsoleted(ngx_zookeeper_srv_conf_t *cfg,
-    const struct String_vector *names)
+    ngx_array_t *names)
 {
     ngx_http_upstream_rr_peer_t   *peer;
     ngx_http_upstream_rr_peers_t  *peers, *primary = cfg->uscf->peer.data;
-    ngx_uint_t                     j = 0;
+    ngx_uint_t                     i, j;
     ngx_dynamic_upstream_op_t      op;
-    char                         **elts =names->data;
-    int32_t                        i;
+    ngx_str_t                     *elts = names->elts;
 
     ngx_rwlock_wlock(&primary->rwlock);
 
-    for (peers = primary;
+    for (peers = primary, j = 0;
          peers && j < 2;
          peers = peers->next, j++) {
 
@@ -905,11 +897,11 @@ ngx_zookeeper_remove_obsoleted(ngx_zookeeper_srv_conf_t *cfg,
              peer;
              peer = peer->next) {
 
-            for (i = 0; i < names->count; i++)
-                if (str_eq(peer->server, ngx_assign_str(elts[i])))
+            for (i = 0; i < names->nelts; i++)
+                if (str_eq(peer->server, elts[i]))
                     break;
 
-            if (i != names->count)
+            if (i != names->nelts)
                 continue;
 
             ngx_zookeeper_op_defaults_locked(&op, &cfg->uscf->host,
@@ -954,13 +946,20 @@ ngx_zookeeper_sync_watch(zhandle_t *zh, int type,
 
 
 typedef struct {
-    u_char                     node[1024];
-    u_char                     server[256];
-    ngx_zookeeper_srv_conf_t  *cfg;
-    ngx_flag_t                 last;
     ngx_pool_t                *pool;
-    struct String_vector       names;
-    int32_t                    index;
+    ngx_str_t                  path;
+    ngx_zookeeper_srv_conf_t  *cfg;
+    ngx_atomic_t              *count;
+    ngx_array_t               *names;
+    ngx_uint_t                 errors;
+} ngx_zookeeper_path_ctx_t;
+
+
+typedef struct {
+    u_char                      node[1024];
+    ngx_pool_t                 *pool;
+    ngx_str_t                  *server;
+    ngx_zookeeper_path_ctx_t   *path;
 } ngx_zookeeper_node_ctx_t;
 
 
@@ -1030,12 +1029,53 @@ ngx_zookeeper_sync_lock(int rc, const char *dummy, const void *ctx)
 
 
 static void
-ngx_zookeeper_sync_upstream_host(int rc, const char *body, int len,
-    const struct Stat *stat, const void *p)
+ngx_zookeeper_ctx_deref(ngx_zookeeper_path_ctx_t *ctx)
 {
-    ngx_zookeeper_node_ctx_t  *ctx = (ngx_zookeeper_node_ctx_t *) p;
+    ngx_atomic_t  count;
+    int           rc;
+
+    count = ngx_atomic_fetch_add(ctx->count, -1) - 1;
+
+    if (count != 0)
+        return;
+
+    ngx_zookeeper_remove_obsoleted(ctx->cfg, ctx->names);
+
+    if (ctx->errors)
+        goto cleanup;
+
+    if (ctx->cfg->zscf->file.data != NULL)
+        ngx_zookeeper_upstream_save(ctx->cfg);
+
+    if (ctx->cfg->zscf->lock.data == NULL) {
+
+        ctx->cfg->epoch = zoo.epoch;
+        goto cleanup;
+    }
+
+    rc = zoo_acreate(zoo.handle, (const char *) ctx->cfg->zscf->lock.data,
+        "", 0, &ZOO_OPEN_ACL_UNSAFE, 0, ngx_zookeeper_sync_lock, ctx->cfg);
+    if (rc != ZOK)
+        ngx_log_error(NGX_LOG_WARN, ngx_cycle->log, 0,
+                      "Zookeeper upstream: [%V] failed to "
+                      "register lock, %s",
+                      &ctx->cfg->uscf->host, zerror(rc));
+
+cleanup:
+
+    ctx->cfg->busy = 0;
+
+    ngx_destroy_pool(ctx->pool);
+}
+
+
+static void
+ngx_zookeeper_sync_upstream_host(int rc, const char *body, int len,
+    const struct Stat *stat, const void *ctxp)
+{
+    ngx_zookeeper_node_ctx_t  *ctx = (ngx_zookeeper_node_ctx_t *) ctxp;
+    ngx_zookeeper_srv_conf_t  *cfg = ctx->path->cfg;
     ngx_dynamic_upstream_op_t  op;
-    ngx_str_t                  server;
     ngx_array_t               *tags;
     ngx_str_t                 *tag;
     ngx_uint_t                 j;
@@ -1044,30 +1084,29 @@ ngx_zookeeper_sync_upstream_host(int rc, const char *body, int len,
 
     if (rc != ZOK) {
 
+        ctx->path->errors++;
         ngx_log_error(NGX_LOG_WARN, ngx_cycle->log, 0,
                       "Zookeeper upstream: [%V] get server, node=%s, %s",
-                      &ctx->cfg->uscf->host, ctx->node, zerror(rc));
+                      &cfg->uscf->host, ctx->node, zerror(rc));
         goto end;
     }
 
-    server.data = ctx->server;
-    server.len = ngx_strlen(server.data);
-
-    ngx_zookeeper_op_defaults(&op, &ctx->cfg->uscf->host, &server,
-        NULL, NGX_DYNAMIC_UPSTEAM_OP_ADD, &ctx->cfg->zscf->defaults);
+    ngx_zookeeper_op_defaults(&op, &cfg->uscf->host, ctx->server,
+        NULL, NGX_DYNAMIC_UPSTEAM_OP_ADD, &cfg->zscf->defaults);
 
     tags = parse_body(ctx->pool, body, len);
     if (tags == NULL) {
 
+        ctx->path->errors++;
         ngx_log_error(NGX_LOG_WARN, ngx_cycle->log, 0,
                       "Zookeeper upstream: [%V] get server, node=%s, no memory",
-                      &ctx->cfg->uscf->host, ctx->node);
+                      &cfg->uscf->host, ctx->node);
         goto end;
     }
 
-    params = ctx->cfg->zscf->params_tag;
+    params = cfg->zscf->params_tag;
 
-    filter = ctx->cfg->zscf->filter;
+    filter = cfg->zscf->filter;
     filtered = filter.data != NULL ? 0 : 1;
 
     tag = tags->elts;
@@ -1085,13 +1124,14 @@ ngx_zookeeper_sync_upstream_host(int rc, const char *body, int len,
     }
 
     if (!filtered) {
-        ctx->names.data[ctx->index][0] = 0;
-        goto skip;
+
+        ngx_str_null(ctx->server);
+        goto end;
     }
 
 again:
 
-    switch (ngx_dynamic_upstream_op(ngx_cycle->log, &op, ctx->cfg->uscf)) {
+    switch (ngx_dynamic_upstream_op(ngx_cycle->log, &op, cfg->uscf)) {
 
         case NGX_OK:
             if (op.status == NGX_HTTP_NOT_MODIFIED) {
@@ -1107,7 +1147,7 @@ again:
                 op.op = NGX_DYNAMIC_UPSTEAM_OP_REMOVE;
 
                 if (ngx_dynamic_upstream_op(ngx_cycle->log, &op,
-                        ctx->cfg->uscf) == NGX_OK) {
+                        cfg->uscf) == NGX_OK) {
 
                     op.op = NGX_DYNAMIC_UPSTEAM_OP_ADD;
                     goto again;
@@ -1115,124 +1155,72 @@ again:
             }
 
         default:
+            ctx->path->errors++;
             ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0,
                           "Zookeeper upstream: [%V] add server, %s",
                           &op.upstream, op.err);
-            goto end;
-    }
-
-skip:
-
-    ngx_zookeeper_remove_obsoleted(ctx->cfg, &ctx->names);
-
-    if (ctx->last) {
-
-        if (ctx->cfg->zscf->file.data != NULL)
-            ngx_zookeeper_upstream_save(ctx->cfg);
-
-        if (ctx->cfg->zscf->lock.data == NULL) {
-
-            ctx->cfg->epoch = zoo.epoch;
-            goto end;
-        }
-
-        rc = zoo_acreate(zoo.handle, (const char *) ctx->cfg->zscf->lock.data,
-            "", 0, &ZOO_OPEN_ACL_UNSAFE, 0, ngx_zookeeper_sync_lock, ctx->cfg);
-        if (rc != ZOK)
-            ngx_log_error(NGX_LOG_WARN, ngx_cycle->log, 0,
-                          "Zookeeper upstream: [%V] failed to "
-                          "register lock, %s",
-                          &ctx->cfg->uscf->host, zerror(rc));
     }
 
 end:
 
-    if (ctx->last)
-        ctx->cfg->busy = 0;
-
     ngx_destroy_pool(ctx->pool);
+
+    ngx_zookeeper_ctx_deref(ctx->path);
 }
 
 
 static void
 ngx_zookeeper_sync_upstream_childrens(int rc, const struct String_vector *names,
-    const void *ctx)
+    const void *ctxp)
 {
-    ngx_zookeeper_srv_conf_t  *cfg = (ngx_zookeeper_srv_conf_t *) ctx;
-    int32_t                    j, i;
-    ngx_str_t                  server;
+    ngx_zookeeper_path_ctx_t  *ctx = (ngx_zookeeper_path_ctx_t *) ctxp;
+    ngx_zookeeper_srv_conf_t  *cfg = ctx->cfg;
+    int32_t                    j;
+    ngx_str_t                 *server;
     ngx_zookeeper_node_ctx_t  *gctx;
-    ngx_pool_t                *pool;
-    int                        len;
+    ngx_pool_t                *pool = NULL;
 
     if (rc != ZOK) {
 
-        ngx_log_error(NGX_LOG_WARN, ngx_cycle->log, 0,
-                      "Zookeeper upstream: [%V] get nodes, %s",
-                      &cfg->uscf->host, zerror(rc));
-        cfg->busy = 0;
-        return;
-    }
+        if (rc != ZNONODE) {
 
-    if (names->count == 0) {
+            ctx->errors++;
+            ngx_log_error(NGX_LOG_WARN, ngx_cycle->log, 0,
+                          "Zookeeper upstream: [%V] get nodes, %s",
+                          &cfg->uscf->host, zerror(rc));
+        }
 
-        ngx_zookeeper_remove_obsoleted(cfg, names);
-
-        if (cfg->zscf->file.data != NULL)
-            ngx_zookeeper_upstream_save(cfg);
-
-        if (cfg->zscf->lock.data != NULL) {
-
-            rc = zoo_acreate(zoo.handle, (const char *) cfg->zscf->lock.data,
-                "", 0, &ZOO_OPEN_ACL_UNSAFE, 0, ngx_zookeeper_sync_lock, cfg);
-            if (rc != ZOK)
-                ngx_log_error(NGX_LOG_WARN, ngx_cycle->log, 0,
-                              "Zookeeper upstream: [%V] failed to "
-                              "register lock, %s",
-                              &cfg->uscf->host, zerror(rc));
-
-        } else
-            cfg->epoch = zoo.epoch;
-
-        cfg->busy = 0;
-
-        return;
+        return ngx_zookeeper_ctx_deref(ctx);
     }
 
     for (j = 0; j < names->count; j++) {
 
-        server.data = (u_char *) names->data[j];
-        server.len = ngx_strlen(server.data);
+        server = ngx_array_push(ctx->names);
+        if (server == NULL)
+            goto nomem;
 
         pool = ngx_create_pool(2048, ngx_cycle->log);
         if (pool == NULL)
             goto nomem;
+
+        server->len = ngx_strlen(names->data[j]);
+        server->data = ngx_pcalloc(ctx->pool, server->len + 1);
+        if (server->data == NULL)
+            goto nomem;
+        ngx_snprintf(server->data, server->len + 1, "%s", names->data[j]);
 
         gctx = ngx_pcalloc(pool, sizeof(ngx_zookeeper_node_ctx_t));
         if (gctx == NULL)
             goto nomem;
 
         gctx->pool = pool;
-        gctx->cfg = cfg;
-        gctx->index = j;
-        ngx_snprintf(gctx->server, sizeof(gctx->server), "%V", &server);
-        gctx->last = j == names->count - 1;
-
-        gctx->names.count = names->count;
-        gctx->names.data = ngx_palloc(pool, names->count * sizeof(char *));
-        if (gctx->names.data == NULL)
-            goto nomem;
-        for (i = 0; i < names->count; i++) {
-
-            len = strlen(names->data[i]);
-            gctx->names.data[i] = ngx_pcalloc(pool, len + 1);
-            if (gctx->names.data[i] == NULL)
-                goto nomem;
-            ngx_memcpy(gctx->names.data[i], names->data[i], len);
-        }
+        gctx->server = server;
+        gctx->path = ctx;
 
         ngx_snprintf(gctx->node, sizeof(gctx->node), "%V/%V",
-            &cfg->zscf->path, &server);
+            &ctx->path, server);
+
+        ngx_atomic_fetch_add(ctx->count, 1);
 
         if (cfg->zscf->lock.data == NULL)
             rc = zoo_awget(zoo.handle, (const char *) gctx->node,
@@ -1243,6 +1231,9 @@ ngx_zookeeper_sync_upstream_childrens(int rc, const struct String_vector *names,
                 0, ngx_zookeeper_sync_upstream_host, gctx);
 
         if (rc != ZOK) {
+
+            ngx_atomic_fetch_add(ctx->count, -1);
+            ctx->errors++;
             ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0,
                           "Zookeeper upstream: [%V] get nodes, %s",
                           &cfg->uscf->host, zerror(rc));
@@ -1254,33 +1245,82 @@ ngx_zookeeper_sync_upstream_childrens(int rc, const struct String_vector *names,
 
 nomem:
 
+        ctx->errors++;
         ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0,
                       "Zookeeper upstream: [%V] get nodes, no memory",
                       &cfg->uscf->host);
 
 end:
 
-        cfg->busy = 0;
         if (pool != NULL)
             ngx_destroy_pool(pool);
 
-        return;
+        break;
     }
+
+    ngx_zookeeper_ctx_deref(ctx);
 }
 
 
 static ngx_int_t
 ngx_zookeeper_sync_upstream(ngx_zookeeper_srv_conf_t *cfg)
 {
-    int rc;
+    int                        rc = ZOK;
+    ngx_str_t                 *path;
+    ngx_uint_t                 j;
+    ngx_zookeeper_path_ctx_t  *ctx;
+    ngx_atomic_t              *count;
+    ngx_pool_t                *pool;
+    ngx_array_t               *names;
 
-    if (cfg->zscf->lock.data == NULL)
-        rc = zoo_awget_children(zoo.handle, (const char *) cfg->zscf->path.data,
-            ngx_zookeeper_sync_watch, cfg,
-            ngx_zookeeper_sync_upstream_childrens, cfg);
-    else
-        rc = zoo_aget_children(zoo.handle, (const char *) cfg->zscf->path.data,
-            0, ngx_zookeeper_sync_upstream_childrens, cfg);
+    path = cfg->zscf->path->elts;
+    count = ngx_calloc(sizeof(ngx_atomic_t), ngx_cycle->log);
+
+    pool = ngx_create_pool(1024, ngx_cycle->log);
+    if (pool == NULL)
+        goto nomem;
+
+    count = ngx_pcalloc(pool, sizeof(ngx_atomic_t));
+    if (pool == NULL)
+        goto nomem;
+
+    names = ngx_array_create(pool, 100, sizeof(ngx_str_t));
+    if (names == NULL)
+        goto nomem;
+
+    ngx_atomic_fetch_add(count, 1);
+
+    for (j = 0; j < cfg->zscf->path->nelts; j++) {
+
+        ctx = ngx_pcalloc(pool, sizeof(ngx_zookeeper_path_ctx_t));
+        if (ctx == NULL)
+            goto nomem;
+
+        ctx->pool = pool;
+        ctx->cfg = cfg;
+        ctx->path = path[j];
+        ctx->count = count;
+        ctx->names = names;
+
+        ngx_atomic_fetch_add(count, 1);
+
+        if (cfg->zscf->lock.data == NULL)
+            rc = zoo_awget_children(zoo.handle, (const char *) path[j].data,
+                ngx_zookeeper_sync_watch, cfg,
+                ngx_zookeeper_sync_upstream_childrens, ctx);
+        else
+            rc = zoo_aget_children(zoo.handle, (const char *) path[j].data,
+                0, ngx_zookeeper_sync_upstream_childrens, ctx);
+
+        if (rc != ZOK) {
+
+            ngx_atomic_fetch_add(count, -1);
+            break;
+        }
+    }
+
+    if (ngx_atomic_fetch_add(count, -1) == 1)
+        ngx_destroy_pool(pool);
 
     if (rc == ZOK)
         return NGX_OK;
@@ -1288,6 +1328,19 @@ ngx_zookeeper_sync_upstream(ngx_zookeeper_srv_conf_t *cfg)
     ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0,
                   "Zookeeper upstream: [%V] sync, %s",
                   &cfg->uscf->host, zerror(rc));
+
+    cfg->busy = 0;
+
+    return NGX_ERROR;
+
+nomem:
+
+    if (count != NULL && ngx_atomic_fetch_add(count, -1) == 1)
+        ngx_destroy_pool(pool);
+
+    ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0,
+                  "Zookeeper upstream: [%V] sync, no memory",
+                  &cfg->uscf->host);
 
     cfg->busy = 0;
 
