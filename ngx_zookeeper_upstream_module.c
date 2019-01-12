@@ -690,6 +690,8 @@ ngx_zookeeper_upstream_save(ngx_zookeeper_srv_conf_t *cfg)
                     &peer->server, peer->max_conns, peer->max_fails,
                     peer->fail_timeout, peer->weight);
                 fwrite(srv, c - srv, 1, f);
+                if (cfg->zscf->defaults.down)
+                    fwrite(" down", 5, 1, f);
                 if (j == 1)
                     fwrite(" backup", 7, 1, f);
                 fwrite(";\n", 2, 1, f);
