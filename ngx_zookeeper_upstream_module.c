@@ -1755,6 +1755,7 @@ zookeeper_sync_unlock_handler(ngx_http_request_t *r)
     ngx_http_variable_value_t  *upstream;
     ngx_http_variable_value_t  *local;
     ngx_uint_t                  j;
+    u_char                     *dst, *src;
 
     if (r->method != NGX_HTTP_GET)
         return NGX_HTTP_NOT_ALLOWED;
@@ -1769,6 +1770,18 @@ zookeeper_sync_unlock_handler(ngx_http_request_t *r)
     if (!zoo.connected)
         return send_response(r, NGX_HTTP_SERVICE_UNAVAILABLE,
             "zoo not connected");
+
+    src = upstream->data;
+
+    dst = ngx_pcalloc(r->pool, upstream->len + 1);
+    if (dst == NULL)
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+
+    upstream->data = dst;
+
+    ngx_unescape_uri(&dst, &src, upstream->len, 0);
+
+    upstream->len = dst - upstream->data;
 
     for (j = 0; j < zoo.len; j++)
         if (ngx_memn2cmp(zoo.cfg[j].uscf->host.data, upstream->data,
