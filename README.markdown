@@ -163,6 +163,10 @@ http {
     location /healthcheck/status {
       healthcheck_status;
     }
+
+    location /zoo_upstream_list {
+      zookeeper_sync_list;
+    }
   }
 }
 ````

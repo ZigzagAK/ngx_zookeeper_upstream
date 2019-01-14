@@ -76,6 +76,10 @@ static char *
 zookeeper_sync_unlock(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 
 
+static char *
+zookeeper_sync_list(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+
+
 static ngx_command_t ngx_http_zookeeper_upstream_commands[] = {
 
     { ngx_string("zookeeper_upstream"),
@@ -137,6 +141,13 @@ static ngx_command_t ngx_http_zookeeper_upstream_commands[] = {
     { ngx_string("zookeeper_sync_unlock"),
       NGX_HTTP_LOC_CONF|NGX_CONF_NOARGS,
       zookeeper_sync_unlock,
+      0,
+      0,
+      NULL },
+
+    { ngx_string("zookeeper_sync_list"),
+      NGX_HTTP_LOC_CONF|NGX_CONF_NOARGS,
+      zookeeper_sync_list,
       0,
       0,
       NULL },
@@ -1778,6 +1789,101 @@ zookeeper_sync_unlock(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     clcf = (ngx_http_core_loc_conf_t *) ngx_http_conf_get_module_loc_conf(cf,
         ngx_http_core_module);
     clcf->handler = zookeeper_sync_unlock_handler;
+
+    return NGX_CONF_OK;
+}
+
+
+static ngx_int_t
+zookeeper_sync_list_handler(ngx_http_request_t *r)
+{
+    ngx_uint_t    j;
+    ngx_chain_t  *out, *start;
+    ngx_int_t     rc;
+    off_t         content_length = 2;
+
+    static ngx_str_t JSON = ngx_string("application/json");
+
+    if (r->method != NGX_HTTP_GET)
+        return NGX_HTTP_NOT_ALLOWED;
+
+    start = ngx_pcalloc(r->pool, sizeof(ngx_chain_t));
+    if (start == NULL)
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+
+    out = start;
+
+    out->buf = ngx_create_temp_buf(r->pool, 32);
+    if (out->buf == NULL)
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    out->buf->last = ngx_snprintf(out->buf->last,
+        out->buf->end - out->buf->last, "[");
+
+    for (j = 0; j < zoo.len; j++) {
+
+        out->next = ngx_pcalloc(r->pool, sizeof(ngx_chain_t));
+        if (out->next == NULL)
+            return NGX_HTTP_INTERNAL_SERVER_ERROR;
+        out = out->next;
+
+        out->buf = ngx_create_temp_buf(r->pool, 1024);
+        if (out->buf == NULL)
+            return NGX_HTTP_INTERNAL_SERVER_ERROR;
+
+        out->buf->last = ngx_snprintf(out->buf->last,
+            out->buf->end - out->buf->last, "{\"name\":\"%V\",\"lock\":\"%V\","
+                                            "\"params_tag\":\"%V\","
+                                            "\"filter\":\"%V\"}," CRLF,
+                &zoo.cfg[j].uscf->host,
+                &zoo.cfg[j].zscf->lock,
+                &zoo.cfg[j].zscf->params_tag,
+                &zoo.cfg[j].zscf->filter);
+
+        if (out->buf->last == out->buf->end)
+            return NGX_HTTP_INTERNAL_SERVER_ERROR;
+
+        if (j == zoo.len - 1)
+            out->buf->last -= 3;
+
+        content_length += out->buf->last - out->buf->start;
+    }
+
+    out->next = ngx_pcalloc(r->pool, sizeof(ngx_chain_t));
+    if (out->next == NULL)
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    out = out->next;
+
+    out->buf = ngx_create_temp_buf(r->pool, 32);
+    if (out->buf == NULL)
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    out->buf->last = ngx_snprintf(out->buf->last,
+        out->buf->end - out->buf->last, "]");
+
+    r->headers_out.status = NGX_HTTP_OK;
+
+    r->headers_out.content_type = JSON;
+    r->headers_out.content_length_n = content_length;
+
+    out->buf->last_buf = (r == r->main) ? 1 : 0;
+    out->buf->last_in_chain = 1;
+
+    rc = ngx_http_send_header(r);
+
+    if (rc == NGX_ERROR || rc > NGX_OK || r->header_only)
+        return rc;
+
+    return ngx_http_output_filter(r, start);
+}
+
+
+static char *
+zookeeper_sync_list(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
+{
+    ngx_http_core_loc_conf_t  *clcf;
+
+    clcf = (ngx_http_core_loc_conf_t *) ngx_http_conf_get_module_loc_conf(cf,
+        ngx_http_core_module);
+    clcf->handler = zookeeper_sync_list_handler;
 
     return NGX_CONF_OK;
 }
