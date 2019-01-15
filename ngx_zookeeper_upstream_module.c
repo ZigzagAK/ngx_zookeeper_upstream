@@ -768,6 +768,12 @@ ngx_http_zookeeper_upstream_post_conf(ngx_conf_t *cf)
         zoo.cfg[j].zscf = ngx_http_conf_upstream_srv_conf(uscf[j],
             ngx_zookeeper_upstream_module);
 
+        if (zoo.cfg[j].zscf->path == NGX_CONF_UNSET_PTR) {
+
+            zoo.cfg[j].zscf = NULL;
+            continue;
+        }
+
         if (zoo.cfg[j].zscf->path->nelts != 0 && uscf[j]->shm_zone != NULL) {
 
             if (zoo.cfg[j].zscf->lock.data != NULL) {
