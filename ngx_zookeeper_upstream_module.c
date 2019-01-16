@@ -40,9 +40,10 @@ ngx_http_zookeeper_upstream_params(ngx_conf_t *cf, ngx_command_t *cmd,
 
 typedef struct
 {
-    ngx_str_t    hosts;
-    ngx_int_t    timeout;
-    ZooLogLevel  log_level;
+    ngx_str_t     hosts;
+    ngx_int_t     timeout;
+    ZooLogLevel   log_level;
+    ngx_array_t  *exclude;
 } ngx_http_zookeeper_upstream_main_conf_t;
 
 
@@ -146,6 +147,13 @@ static ngx_command_t ngx_http_zookeeper_upstream_commands[] = {
       offsetof(ngx_http_zookeeper_upstream_srv_conf_t, exclude),
       NULL },
 
+    { ngx_string("zookeeper_sync_global_exclude"),
+      NGX_HTTP_MAIN_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_str_array_slot,
+      NGX_HTTP_MAIN_CONF_OFFSET,
+      offsetof(ngx_http_zookeeper_upstream_main_conf_t, exclude),
+      NULL },
+
     { ngx_string("zookeeper_sync_unlock"),
       NGX_HTTP_LOC_CONF|NGX_CONF_NOARGS,
       zookeeper_sync_unlock,
@@ -204,6 +212,9 @@ ngx_http_zookeeper_upstream_create_main_conf(ngx_conf_t *cf)
 
     zmcf->log_level = ZOO_LOG_LEVEL_ERROR;
     zmcf->timeout = NGX_CONF_UNSET;
+    zmcf->exclude = ngx_array_create(cf->pool, 1, sizeof(ngx_str_t));
+    if (zmcf->exclude == NULL)
+        return NULL;
 
     return zmcf;
 }
@@ -1199,18 +1210,37 @@ end:
 }
 
 
+static ngx_flag_t
+host_excluded(ngx_array_t *exclude, const char *host)
+{
+    ngx_str_t  *server;
+    ngx_uint_t  j;
+
+    server = exclude->elts;
+
+    for (j = 0; j < exclude->nelts; j++)
+        if (ngx_strncmp(server[j].data, host, server[j].len) == 0)
+            return 1;
+
+    return 0;
+}
+
+
 static void
 ngx_zookeeper_sync_upstream_childrens(int rc, const struct String_vector *names,
     const void *ctxp)
 {
+    ngx_http_zookeeper_upstream_main_conf_t  *zmcf;
+
     ngx_zookeeper_path_ctx_t  *ctx = (ngx_zookeeper_path_ctx_t *) ctxp;
     ngx_zookeeper_srv_conf_t  *cfg = ctx->cfg;
     int32_t                    j;
-    ngx_uint_t                 i;
-    ngx_str_t                 *server, *elts;
-    ngx_array_t               *excluded;
+    ngx_str_t                 *server;
     ngx_zookeeper_node_ctx_t  *gctx;
     ngx_pool_t                *pool = NULL;
+
+    zmcf = ngx_http_cycle_get_module_main_conf(ngx_cycle,
+        ngx_zookeeper_upstream_module);
 
     if (rc != ZOK) {
 
@@ -1225,16 +1255,10 @@ ngx_zookeeper_sync_upstream_childrens(int rc, const struct String_vector *names,
         return ngx_zookeeper_ctx_deref(ctx);
     }
 
-    excluded = ctx->cfg->zscf->exclude;
-    elts = excluded->elts;
-
     for (j = 0; j < names->count; j++) {
 
-        for (i = 0; i < excluded->nelts; i++)
-            if (ngx_strncmp(elts[i].data, names->data[j], elts[i].len) == 0)
-                break;
-
-        if (i < excluded->nelts)
+        if (host_excluded(cfg->zscf->exclude, names->data[j])
+                || host_excluded(zmcf->exclude, names->data[j]))
             continue;
 
         server = ngx_array_push(ctx->names);
