@@ -54,6 +54,7 @@ typedef struct
     ngx_str_t     file;
     ngx_str_t     params_tag;
     ngx_str_t     filter;
+    ngx_array_t  *exclude;
 
     ngx_dynamic_upstream_op_t  defaults;
 } ngx_http_zookeeper_upstream_srv_conf_t;
@@ -138,6 +139,13 @@ static ngx_command_t ngx_http_zookeeper_upstream_commands[] = {
       offsetof(ngx_http_zookeeper_upstream_srv_conf_t, filter),
       NULL },
 
+    { ngx_string("zookeeper_sync_exclude"),
+      NGX_HTTP_UPS_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_str_array_slot,
+      NGX_HTTP_SRV_CONF_OFFSET,
+      offsetof(ngx_http_zookeeper_upstream_srv_conf_t, exclude),
+      NULL },
+
     { ngx_string("zookeeper_sync_unlock"),
       NGX_HTTP_LOC_CONF|NGX_CONF_NOARGS,
       zookeeper_sync_unlock,
@@ -213,6 +221,9 @@ ngx_http_zookeeper_upstream_create_srv_conf(ngx_conf_t *cf)
 
     ngx_str_set(&zscf->params_tag, "@params");
     zscf->path = NGX_CONF_UNSET_PTR;
+    zscf->exclude = ngx_array_create(cf->pool, 1, sizeof(ngx_str_t));
+    if (zscf->exclude == NULL)
+        return NULL;
 
     return zscf;
 }
@@ -1195,7 +1206,9 @@ ngx_zookeeper_sync_upstream_childrens(int rc, const struct String_vector *names,
     ngx_zookeeper_path_ctx_t  *ctx = (ngx_zookeeper_path_ctx_t *) ctxp;
     ngx_zookeeper_srv_conf_t  *cfg = ctx->cfg;
     int32_t                    j;
-    ngx_str_t                 *server;
+    ngx_uint_t                 i;
+    ngx_str_t                 *server, *elts;
+    ngx_array_t               *excluded;
     ngx_zookeeper_node_ctx_t  *gctx;
     ngx_pool_t                *pool = NULL;
 
@@ -1212,7 +1225,17 @@ ngx_zookeeper_sync_upstream_childrens(int rc, const struct String_vector *names,
         return ngx_zookeeper_ctx_deref(ctx);
     }
 
+    excluded = ctx->cfg->zscf->exclude;
+    elts = excluded->elts;
+
     for (j = 0; j < names->count; j++) {
+
+        for (i = 0; i < excluded->nelts; i++)
+            if (ngx_strncmp(elts[i].data, names->data[j], elts[i].len) == 0)
+                break;
+
+        if (i < excluded->nelts)
+            continue;
 
         server = ngx_array_push(ctx->names);
         if (server == NULL)
