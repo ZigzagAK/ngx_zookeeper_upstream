@@ -1110,6 +1110,19 @@ cleanup:
 }
 
 
+static int
+parse_deprecated(const char *body)
+{
+    int  port;
+
+    if (sscanf(body, "{\"port\":%d}", &port) == 1)
+        if (port > 0 && port <= 65535)
+            return port;
+
+    return NGX_ERROR;
+}
+
+
 static void
 ngx_zookeeper_sync_upstream_host(int rc, const char *body, int len,
     const struct Stat *stat, const void *ctxp)
@@ -1122,6 +1135,7 @@ ngx_zookeeper_sync_upstream_host(int rc, const char *body, int len,
     ngx_uint_t                 j;
     ngx_str_t                  filter, params;
     ngx_flag_t                 filtered;
+    int                        port;
 
     if (rc != ZOK) {
 
@@ -1132,8 +1146,17 @@ ngx_zookeeper_sync_upstream_host(int rc, const char *body, int len,
         goto end;
     }
 
+    port = parse_deprecated(body);
+
+    if (port != NGX_ERROR)
+        ctx->server->len = ngx_snprintf(ctx->server->data + ctx->server->len,
+            32, ":%d", port) - ctx->server->data;
+
     ngx_zookeeper_op_defaults(&op, &cfg->uscf->host, ctx->server,
         NULL, NGX_DYNAMIC_UPSTEAM_OP_ADD, &cfg->zscf->defaults);
+
+    if (port != NGX_ERROR)
+        goto again;
 
     tags = parse_body(ctx->pool, body, len);
     if (tags == NULL) {
@@ -1270,7 +1293,7 @@ ngx_zookeeper_sync_upstream_childrens(int rc, const struct String_vector *names,
             goto nomem;
 
         server->len = ngx_strlen(names->data[j]);
-        server->data = ngx_pcalloc(ctx->pool, server->len + 1);
+        server->data = ngx_pcalloc(ctx->pool, server->len + 32);
         if (server->data == NULL)
             goto nomem;
         ngx_snprintf(server->data, server->len + 1, "%s", names->data[j]);
