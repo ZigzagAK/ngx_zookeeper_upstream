@@ -1201,6 +1201,7 @@ again:
             if (op.status == NGX_HTTP_NOT_MODIFIED) {
 
                 op.op = NGX_DYNAMIC_UPSTEAM_OP_PARAM;
+                op.op_param &= ~NGX_DYNAMIC_UPSTEAM_OP_PARAM_DOWN;
                 goto again;
             }
             break;
