@@ -863,6 +863,8 @@ ngx_http_zookeeper_upstream_exit_worker(ngx_cycle_t *cycle)
     if (zoo.handle == NULL)
         return;
 
+    zoo.connected = 0;
+
     zookeeper_close(zoo.handle);
 
     zoo.handle = NULL;
@@ -976,6 +978,9 @@ ngx_zookeeper_sync_watch(zhandle_t *zh, int type,
     if (type == ZOO_CHILD_EVENT
         || type == ZOO_CHANGED_EVENT
         || type == ZOO_DELETED_EVENT) {
+
+        if (ngx_exiting || ngx_quit || ngx_terminate)
+            return;
 
         ngx_log_error(NGX_LOG_INFO, ngx_cycle->log, 0,
                       "Zookeeper upstream: [%V] changed", &cfg->uscf->host);
