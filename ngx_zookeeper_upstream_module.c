@@ -1151,6 +1151,9 @@ ngx_zookeeper_sync_upstream_host(int rc, const char *body, int len,
         goto end;
     }
 
+    if (body == NULL)
+        goto again;
+
     port = parse_deprecated(body);
 
     if (port != NGX_ERROR)
