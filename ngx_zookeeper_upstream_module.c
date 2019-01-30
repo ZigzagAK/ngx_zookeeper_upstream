@@ -427,6 +427,7 @@ typedef struct {
     ngx_http_zookeeper_upstream_srv_conf_t  *zscf;
     int                                      epoch;
     ngx_flag_t                               busy;
+    ngx_atomic_t                             lock;
 } ngx_zookeeper_srv_conf_t;
 
 
@@ -985,7 +986,6 @@ ngx_zookeeper_sync_watch(zhandle_t *zh, int type,
         ngx_log_error(NGX_LOG_INFO, ngx_cycle->log, 0,
                       "Zookeeper upstream: [%V] changed", &cfg->uscf->host);
         cfg->epoch = 0;
-        ngx_msleep(100);
         ngx_zookeeper_sync_update(cfg);
     }
 }
@@ -1573,13 +1573,23 @@ ngx_zookeeper_sync_update(ngx_zookeeper_srv_conf_t *cfg)
     if (cfg->zscf == NULL)
         return NGX_OK;
 
-    if (cfg->busy)
-        return NGX_OK;
+    ngx_rwlock_wlock(&cfg->lock);
 
-    if (cfg->epoch == zoo.epoch)
+    if (cfg->busy) {
+
+        ngx_rwlock_unlock(&cfg->lock);
         return NGX_OK;
+    }
+
+    if (cfg->epoch == zoo.epoch) {
+
+        ngx_rwlock_unlock(&cfg->lock);
+        return NGX_OK;
+    }
 
     cfg->busy = 1;
+
+    ngx_rwlock_unlock(&cfg->lock);
 
     if (cfg->zscf->lock.data == NULL)
         return ngx_zookeeper_sync_upstream(cfg);
