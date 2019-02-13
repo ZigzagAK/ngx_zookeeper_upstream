@@ -1134,6 +1134,7 @@ ngx_zookeeper_sync_upstream_host(int rc, const char *body, int len,
 {
     ngx_zookeeper_node_ctx_t  *ctx = (ngx_zookeeper_node_ctx_t *) ctxp;
     ngx_zookeeper_srv_conf_t  *cfg = ctx->path->cfg;
+    ngx_zookeeper_path_ctx_t  *path = ctx->path;
     ngx_dynamic_upstream_op_t  op;
     ngx_array_t               *tags;
     ngx_str_t                 *tag;
@@ -1151,7 +1152,7 @@ ngx_zookeeper_sync_upstream_host(int rc, const char *body, int len,
         goto end;
     }
 
-    if (body == NULL)
+    if (body == NULL || len == 0)
         goto update;
 
     port = parse_deprecated(body);
@@ -1240,7 +1241,7 @@ end:
 
     ngx_destroy_pool(ctx->pool);
 
-    ngx_zookeeper_ctx_deref(ctx->path);
+    ngx_zookeeper_ctx_deref(path);
 }
 
 
