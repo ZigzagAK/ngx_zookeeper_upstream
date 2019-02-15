@@ -1153,7 +1153,7 @@ ngx_zookeeper_sync_upstream_host(int rc, const char *body, int len,
     }
 
     if (body == NULL || len == 0)
-        goto update;
+        goto defaults;
 
     port = parse_deprecated(body);
 
@@ -1161,7 +1161,7 @@ ngx_zookeeper_sync_upstream_host(int rc, const char *body, int len,
 
         ctx->server->len = ngx_snprintf(ctx->server->data + ctx->server->len,
             32, ":%d", port) - ctx->server->data;
-        goto update;
+        goto defaults;
     }
 
     tags = parse_body(ctx->pool, body, len);
@@ -1173,6 +1173,9 @@ ngx_zookeeper_sync_upstream_host(int rc, const char *body, int len,
                       &cfg->uscf->host, ctx->node);
         goto end;
     }
+
+    ngx_zookeeper_op_defaults(&op, &cfg->uscf->host, ctx->server,
+        NULL, NGX_DYNAMIC_UPSTEAM_OP_ADD, &cfg->zscf->defaults);
 
     params = cfg->zscf->params_tag;
 
@@ -1199,7 +1202,9 @@ ngx_zookeeper_sync_upstream_host(int rc, const char *body, int len,
         goto end;
     }
 
-update:
+    goto again;
+
+defaults:
 
     ngx_zookeeper_op_defaults(&op, &cfg->uscf->host, ctx->server,
         NULL, NGX_DYNAMIC_UPSTEAM_OP_ADD, &cfg->zscf->defaults);
