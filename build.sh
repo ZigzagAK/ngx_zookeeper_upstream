@@ -221,7 +221,7 @@ function build_release() {
     ./configure --prefix="$INSTALL_DIR/nginx-$VERSION" \
                 $EMBEDDED_OPTS \
                 --with-stream \
-                --with-cc-opt="$ADDITIONAL_INCLUDES" \
+                --with-cc-opt="-Wno-error=unused-value $ADDITIONAL_INCLUDES" \
                 --with-ld-opt="$ADDITIONAL_LIBS" \
                 --add-module=../ngx_dynamic_upstream \
                 --add-module=../ngx_dynamic_healthcheck \
