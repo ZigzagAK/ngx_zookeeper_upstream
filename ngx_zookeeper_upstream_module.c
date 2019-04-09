@@ -793,6 +793,7 @@ ngx_http_zookeeper_upstream_post_conf(ngx_conf_t *cf)
 
         if (zoo.cfg[j].zscf->path == NGX_CONF_UNSET_PTR) {
 
+            zoo.cfg[j].uscf = NULL;
             zoo.cfg[j].zscf = NULL;
             continue;
         }
@@ -818,8 +819,10 @@ ngx_http_zookeeper_upstream_post_conf(ngx_conf_t *cf)
 
             ngx_log_error(NGX_LOG_INFO, ngx_cycle->log, 0,
                           "Zookeeper upstream: [%V] sync on", &uscf[j]->host);
-        } else
+        } else {
+            zoo.cfg[j].uscf = NULL;
             zoo.cfg[j].zscf = NULL;
+        }
     }
 
     return NGX_OK;
@@ -1886,12 +1889,17 @@ zookeeper_sync_unlock_handler(ngx_http_request_t *r)
 
     upstream->len = dst - upstream->data;
 
-    for (j = 0; j < zoo.len; j++)
+    for (j = 0; j < zoo.len; j++) {
+
+        if (zoo.cfg[j].uscf == NULL)
+            continue;
+
         if (ngx_memn2cmp(zoo.cfg[j].uscf->host.data, upstream->data,
                          zoo.cfg[j].uscf->host.len, upstream->len) == 0) {
             return zookeeper_sync_unlock_upstream(r, !local->not_found,
                 zoo.cfg + j);
         }
+    }
 
     return send_response(r, NGX_HTTP_BAD_REQUEST, "upstream not found");
 }
@@ -1936,6 +1944,9 @@ zookeeper_sync_list_handler(ngx_http_request_t *r)
         out->buf->end - out->buf->last, "[");
 
     for (j = 0; j < zoo.len; j++) {
+
+        if (zoo.cfg[j].uscf == NULL)
+            continue;
 
         out->next = ngx_pcalloc(r->pool, sizeof(ngx_chain_t));
         if (out->next == NULL)
