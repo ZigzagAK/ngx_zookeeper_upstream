@@ -223,6 +223,7 @@ function build_release() {
                 --with-stream \
                 --with-cc-opt="-Wno-error=unused-value $ADDITIONAL_INCLUDES" \
                 --with-ld-opt="$ADDITIONAL_LIBS" \
+                --add-module=../echo-nginx-module \
                 --add-module=../ngx_dynamic_upstream \
                 --add-module=../ngx_dynamic_healthcheck \
                 --add-module=../.. >> $BUILD_LOG 2>>$ERR_LOG
@@ -320,6 +321,7 @@ function download() {
 
   download_module ZigzagAK    ngx_dynamic_upstream             master
   download_module ZigzagAK    ngx_dynamic_healthcheck          master
+  download_module openresty   echo-nginx-module                master
 
   cd ..
 }

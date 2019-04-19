@@ -1969,10 +1969,12 @@ zookeeper_sync_list_handler(ngx_http_request_t *r)
         if (out->buf->last == out->buf->end)
             return NGX_HTTP_INTERNAL_SERVER_ERROR;
 
-        if (j == zoo.len - 1)
-            out->buf->last -= 3;
-
         content_length += out->buf->last - out->buf->start;
+    }
+
+    if (content_length > 2) {
+        out->buf->last-=3;
+        content_length-=3;
     }
 
     out->next = ngx_pcalloc(r->pool, sizeof(ngx_chain_t));
