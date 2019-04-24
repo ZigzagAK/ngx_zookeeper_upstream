@@ -1023,6 +1023,9 @@ parse_body(ngx_pool_t *pool, const char *body, int len)
     if (a == NULL)
         return NULL;
 
+    if (body == NULL)
+        return a;
+
     while (len > 0 && isspace(*body)) {
         body++;
         len--;
@@ -1123,6 +1126,9 @@ parse_deprecated(const char *body)
 {
     int  port;
 
+    if (body == NULL)
+        return NGX_ERROR;
+
     if (sscanf(body, "{\"port\":%d}", &port) == 1)
         if (port > 0 && port <= 65535)
             return port;
@@ -1155,8 +1161,11 @@ ngx_zookeeper_sync_upstream_host(int rc, const char *body, int len,
         goto end;
     }
 
-    if (body == NULL || len == 0)
-        goto defaults;
+    if (body == NULL || len == 0) {
+
+        body = NULL;
+        len = 0;
+    }
 
     port = parse_deprecated(body);
 
