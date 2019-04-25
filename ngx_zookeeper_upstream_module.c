@@ -1122,16 +1122,21 @@ cleanup:
 
 
 static int
-parse_deprecated(const char *body)
+parse_deprecated(const char *body, int len)
 {
-    int  port;
+    static ngx_str_t  prefix = ngx_string("{\"port\":");
 
-    if (body == NULL)
+    long  port;
+
+    if (body == NULL || (size_t) len < prefix.len + 2)
         return NGX_ERROR;
 
-    if (sscanf(body, "{\"port\":%d}", &port) == 1)
-        if (port > 0 && port <= 65535)
-            return port;
+    if (ngx_memcmp(prefix.data, body, prefix.len) != 0 || body[len - 1] != '}')
+        return NGX_ERROR;
+
+    port = strtol(body + prefix.len, NULL, 10);
+    if (port > 0 && port <= 65535)
+        return port;
 
     return NGX_ERROR;
 }
@@ -1161,13 +1166,13 @@ ngx_zookeeper_sync_upstream_host(int rc, const char *body, int len,
         goto end;
     }
 
-    if (body == NULL || len == 0) {
+    if (body == NULL || len <= 0) {
 
         body = NULL;
         len = 0;
     }
 
-    port = parse_deprecated(body);
+    port = parse_deprecated(body, len);
 
     if (port != NGX_ERROR) {
 

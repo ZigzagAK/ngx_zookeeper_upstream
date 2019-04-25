@@ -18,7 +18,7 @@ ret=0
 for t in $(ls t/*.t)
 do
   echo "Tests : "$t
-  prove $t
+  prove $t $@
   if [ $? -ne 0 ]; then
     ret=$?
     exit $ret
