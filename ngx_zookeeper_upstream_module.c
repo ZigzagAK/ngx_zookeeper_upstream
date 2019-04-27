@@ -1091,10 +1091,10 @@ ngx_zookeeper_ctx_deref(ngx_zookeeper_path_ctx_t *ctx)
     if (count != 0)
         return;
 
-    ngx_zookeeper_remove_obsoleted(ctx->cfg, ctx->names);
-
-    if (ctx->errors)
+    if (ctx->errors != 0)
         goto cleanup;
+
+    ngx_zookeeper_remove_obsoleted(ctx->cfg, ctx->names);
 
     if (ctx->cfg->zscf->file.data != NULL)
         ngx_zookeeper_upstream_save(ctx->cfg);
