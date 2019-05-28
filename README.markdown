@@ -3,6 +3,10 @@ Name
 
 ngx_zookeeper_upstream - Upstream synced with Zookeeper.
 
+Build status
+============
+[![Build Status](https://travis-ci.org/ZigzagAK/ngx_zookeeper_upstream.svg)](https://travis-ci.org/ZigzagAK/ngx_zookeeper_upstream)
+
 # Quick Start
 
 ## Nginx config

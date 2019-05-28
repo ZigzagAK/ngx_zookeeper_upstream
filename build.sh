@@ -404,8 +404,6 @@ if [ $download_only -eq 0 ]; then
   build
 fi
 
-cp LICENSE "$INSTALL_PREFIX/nginx-$VERSION$SUFFIX/LICENSE"
-
 cd "$DIR"
 
 kernel_name=$(uname -s)
