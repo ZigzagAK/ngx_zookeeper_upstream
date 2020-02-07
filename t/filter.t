@@ -124,12 +124,12 @@ __DATA__
 --- request
     GET /list
 --- response_body_like eval
-qr/\[{"name":"app1","lock":"","params_tag":"\@params","filter":""},\r
-{"name":"app1-a","lock":"","params_tag":"\@params","filter":"\@a"},\r
-{"name":"app1-b","lock":"","params_tag":"\@params","filter":"\@b"},\r
-{"name":"app2","lock":"\/test_upstream\/.locks\/app2\/.+","params_tag":"\@params","filter":""},\r
-{"name":"app2-a","lock":"\/test_upstream\/.locks\/app2-a\/.+","params_tag":"\@params","filter":"\@a"},\r
-{"name":"app2-b","lock":"\/test_upstream\/.locks\/app2-b\/.+","params_tag":"\@params","filter":"\@b"}\]/
+qr/\[\{"name":"app1","lock":"","params_tag":"\@params","filter":""\},\r
+\{"name":"app1-a","lock":"","params_tag":"\@params","filter":"\@a"\},\r
+\{"name":"app1-b","lock":"","params_tag":"\@params","filter":"\@b"\},\r
+\{"name":"app2","lock":"\/test_upstream\/.locks\/app2\/.+","params_tag":"\@params","filter":""\},\r
+\{"name":"app2-a","lock":"\/test_upstream\/.locks\/app2-a\/.+","params_tag":"\@params","filter":"\@a"\},\r
+\{"name":"app2-b","lock":"\/test_upstream\/.locks\/app2-b\/.+","params_tag":"\@params","filter":"\@b"\}\]/
 
 
 === STEP 3: Check peers

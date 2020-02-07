@@ -94,7 +94,7 @@ __DATA__
 --- request
     GET /list
 --- response_body_like eval
-qr/\[{"name":"simple","lock":"","params_tag":"\@params","filter":""}\]/
+qr/\[\{"name":"simple","lock":"","params_tag":"\@params","filter":""\}\]/
 
 
 === STEP 3: Check peers

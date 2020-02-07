@@ -21,7 +21,7 @@ DIR="$(pwd)"
 DIAG_DIR="diag"
 VCS_PATH=${DIR%/*/*}
 
-VERSION="1.16.0"
+VERSION="1.17.6"
 ZOO_VERSION="3.5.5"
 PCRE_VERSION="8.40"
 ZLIB_VERSION="1.2.11"
@@ -37,13 +37,13 @@ if [ "$INSTALL_DIR" == "" ]; then
 fi
 
 if [ "$ERR_LOG" == "" ]; then
-  ERR_LOG=/dev/null
+  ERR_LOG=$BUILD_DIR/error.log
 else
   ERR_LOG=$BUILD_DIR/$ERR_LOG
 fi
 
 if [ "$BUILD_LOG" == "" ]; then
-  BUILD_LOG=/dev/null
+  BUILD_LOG=$BUILD_DIR/build.log
 else
   BUILD_LOG=$BUILD_DIR/$BUILD_LOG
 fi

@@ -306,7 +306,7 @@ parse_token(ngx_dynamic_upstream_op_t *op,
     }
 
     ngx_strlow(k.data, k.data, k.len);
-    
+
     if (str_eq(BACKUP, k)) {
 
         op->backup = 1;
@@ -606,45 +606,55 @@ session_watcher(zhandle_t *zh,
 }
 
 
-static FILE *
-state_open(ngx_str_t *state_file, const char *mode)
+static ngx_file_t
+file_open(ngx_str_t *filename, int create, int mode)
 {
-    FILE  *f;
+    ngx_file_t  file;
 
-    f = fopen((const char *) state_file->data, mode);
-    if (f == NULL)
-        ngx_log_error(NGX_LOG_WARN, ngx_cycle->log, 0, "can't open file: %V",
-                      state_file);
+    file.name = *filename;
+    file.offset = 0;
+ 
+    file.fd = ngx_open_file(file.name.data, mode,
+                            create, NGX_FILE_DEFAULT_ACCESS);
 
-    return f;
+    return file;
 }
 
 
 static char *
 ngx_create_upsync_file(ngx_conf_t *cf, void *post, void *data)
 {
-    ngx_str_t  *fname = data;
-    FILE       *f;
+    ngx_str_t  *filename = (ngx_str_t *) data;
+    ngx_file_t  file;
 
     static const ngx_str_t
         default_server = ngx_string("server 0.0.0.0:1 down;");
 
-    if (ngx_conf_full_name(cf->cycle, fname, 1) != NGX_OK)
+    if (ngx_conf_full_name(cf->cycle, filename, 1) != NGX_OK)
         return NGX_CONF_ERROR;
 
-    f = state_open(fname, "r");
-    if (f != NULL) {
-        fclose(f);
-        return ngx_conf_include(cf, NULL, NULL);
+    file = file_open(filename, NGX_FILE_OPEN, NGX_FILE_RDONLY);
+    if (file.fd != NGX_INVALID_FILE)
+        goto done;
+
+    file = file_open(filename, NGX_FILE_CREATE_OR_OPEN, NGX_FILE_WRONLY);
+    if (file.fd == NGX_INVALID_FILE) {
+        ngx_log_error(NGX_LOG_ERR, cf->log, ngx_errno,
+                      ngx_open_file_n " \"%V\" failed", filename);
+        return NGX_CONF_ERROR;
     }
 
-    f = state_open(fname, "w+");
-    if (f == NULL)
+    file.log = cf->log;
+
+    if (ngx_write_file(&file, default_server.data, default_server.len, 0)
+        == NGX_ERROR) {
+        ngx_close_file(file.fd);
         return NGX_CONF_ERROR;
+    }
 
-    fwrite(default_server.data, default_server.len, 1, f);
+done:
 
-    fclose(f);
+    ngx_close_file(file.fd);
 
     return ngx_conf_include(cf, NULL, NULL);
 }
@@ -656,12 +666,13 @@ ngx_zookeeper_upstream_save(ngx_http_zookeeper_upstream_srv_conf_t *zscf)
     ngx_http_upstream_rr_peer_t   *peer;
     ngx_http_upstream_rr_peers_t  *peers, *primary;
     ngx_uint_t                     j = 0;
-    u_char                         srv[10240], *c;
-    FILE                          *f;
+    ngx_file_t                     file;
     ngx_pool_t                    *pool;
     ngx_array_t                   *servers;
     ngx_str_t                     *server, *s;
     ngx_uint_t                     i;
+    u_char                        *start, *end, *last;
+
 
     static const ngx_str_t
         default_server = ngx_string("server 0.0.0.0:1 down;");
@@ -674,15 +685,26 @@ ngx_zookeeper_upstream_save(ngx_http_zookeeper_upstream_srv_conf_t *zscf)
         return;
     }
 
-    f = state_open(&zscf->file, "w+");
-    if (f == NULL) {
-        ngx_destroy_pool(pool);
-        return;
-    }
-
     primary = zscf->uscf->peer.data;
 
     ngx_rwlock_rlock(&primary->rwlock);
+
+    start = (u_char *) ngx_palloc(pool, ngx_pagesize);
+    if (start == NULL)
+        goto nomem;
+    end = start + ngx_pagesize;
+
+    file.name = zscf->file;
+    file.offset = 0;
+ 
+    file.fd = ngx_open_file(zscf->file.data, NGX_FILE_WRONLY,
+                            NGX_FILE_TRUNCATE, NGX_FILE_DEFAULT_ACCESS);
+    if (file.fd == NGX_INVALID_FILE) {
+        ngx_rwlock_unlock(&primary->rwlock);
+        ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, ngx_errno,
+                      ngx_open_file_n " \"%V\" failed", &zscf->file);
+        return;
+    }
 
     servers = ngx_array_create(pool, 100, sizeof(ngx_str_t));
     if (servers == NULL)
@@ -707,35 +729,52 @@ ngx_zookeeper_upstream_save(ngx_http_zookeeper_upstream_srv_conf_t *zscf)
                     break;
 
             if (i == servers->nelts) {
+
                 s = ngx_array_push(servers);
                 if (s == NULL)
                     goto nomem;
-                *s = peer->server;
-                c = ngx_snprintf(srv, 10240,
-                    "server %V max_conns=%d max_fails=%d fail_timeout=%d "
-                    "weight=%d",
-                    &peer->server, peer->max_conns, peer->max_fails,
-                    peer->fail_timeout, peer->weight);
-                fwrite(srv, c - srv, 1, f);
+
+                ngx_memcpy(s, &peer->server, sizeof(ngx_str_t));
+
+                last = ngx_snprintf(start, end - start,
+                                    "server %V"
+                                    " max_conns=%d"
+                                    " max_fails=%d"
+                                    " fail_timeout=%d"
+                                    " weight=%d",
+                                    &peer->server,
+                                    peer->max_conns,
+                                    peer->max_fails,
+                                    peer->fail_timeout,
+                                    peer->weight);
+
                 if (zscf->defaults.down)
-                    fwrite(" down", 5, 1, f);
+                    last = ngx_snprintf(last, end - last, " down");
+
                 if (j == 1)
-                    fwrite(" backup", 7, 1, f);
-                fwrite(";\n", 2, 1, f);
+                    last = ngx_snprintf(last, end - last, " backup");
+
+                last = ngx_snprintf(last, end - last, ";\n");
+
+                if (ngx_write_file(&file, start, last - start, file.offset)
+                        == NGX_ERROR)
+                    goto fail;
             }
         }
     }
 
-    if (ftell(f) == 0)
-        fwrite(default_server.data, default_server.len, 1, f);
+    if (file.offset != 0)
+        goto end;
+
+    if (ngx_write_file(&file, default_server.data, default_server.len, 0)
+            == NGX_ERROR)
+        goto fail;
 
 end:
 
+    ngx_close_file(file.fd);
+
     ngx_rwlock_unlock(&primary->rwlock);
-
-    fclose(f);
-
-    ngx_destroy_pool(pool);
 
     return;
 
@@ -743,6 +782,14 @@ nomem:
 
     ngx_log_error(NGX_LOG_WARN, ngx_cycle->log, 0,
                   "Zookeeper upstream: no memory");
+    goto end;
+
+fail:
+
+    ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, ngx_errno,
+                  ngx_write_fd_n " \"%V\" failed", &zscf->file);
+    ngx_delete_file(zscf->file.data);
+
     goto end;
 }
 
@@ -1178,8 +1225,14 @@ again:
 
                     op.op = NGX_DYNAMIC_UPSTEAM_OP_ADD;
                     goto again;
-                }
+                }                
             }
+
+            ctx->path->errors++;
+            ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0,
+                          "Zookeeper upstream: [%V] add server, %s",
+                          &op.upstream, op.err);
+            break;
 
         default:
             ctx->path->errors++;
