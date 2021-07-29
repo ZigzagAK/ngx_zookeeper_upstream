@@ -1091,7 +1091,8 @@ ngx_zookeeper_ctx_deref(ngx_zookeeper_path_ctx_t *ctx)
     }
 
     rc = zoo_acreate(zoo.handle, (const char *) ctx->zscf->lock.data,
-        "", 0, &ZOO_OPEN_ACL_UNSAFE, 0, ngx_zookeeper_sync_lock, ctx->zscf);
+        "", 0, &ZOO_OPEN_ACL_UNSAFE, ctx->zscf->lock_ephemeral == 1 ? ZOO_EPHEMERAL : 0,
+        ngx_zookeeper_sync_lock, ctx->zscf);
     if (rc != ZOK)
         ngx_log_error(NGX_LOG_WARN, ngx_cycle->log, 0,
                       "Zookeeper upstream: [%V] failed to "
@@ -1510,7 +1511,7 @@ ensure_zpath_ready(int rc, const char *dummy, const void *ctx)
 
 
 static void
-ensure_zpath(const ngx_str_t *path, ngx_flag_t ephemeral)
+ensure_zpath(const ngx_str_t *path)
 {
     u_char     *s2;
     ngx_str_t  *sub;
@@ -1524,7 +1525,6 @@ ensure_zpath(const ngx_str_t *path, ngx_flag_t ephemeral)
             sub = ngx_calloc(sizeof(ngx_str_t), ngx_cycle->log);
             if (sub == NULL)
                 goto nomem;
-
             sub->data = ngx_calloc(s2 - path->data + 1, ngx_cycle->log);
             if (sub->data == NULL)
                 goto nomem;
@@ -1532,7 +1532,7 @@ ensure_zpath(const ngx_str_t *path, ngx_flag_t ephemeral)
             ngx_memcpy(sub->data, path->data, sub->len);
 
             zoo_acreate(zoo.handle, (const char *) sub->data, "", 0,
-                &ZOO_OPEN_ACL_UNSAFE, ephemeral == 1 && *s2 == 0 ? ZOO_EPHEMERAL : 0, ensure_zpath_ready, sub);
+                &ZOO_OPEN_ACL_UNSAFE, 0, ensure_zpath_ready, sub);
         }
     }
 
@@ -1559,7 +1559,7 @@ ensure_lock_path_ready(int rc, const struct Stat *dummy,
     if (rc == ZNONODE) {
 
         zscf->busy = 0;
-        return ensure_zpath(&zscf->lock_path, zscf->lock_ephemeral);
+        return ensure_zpath(&zscf->lock_path);
     }
 
     ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0,
