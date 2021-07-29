@@ -56,6 +56,7 @@ typedef struct
     ngx_array_t  *path;
     ngx_str_t     lock;
     ngx_str_t     lock_path;
+    ngx_flag_t    lock_ephemeral;
     ngx_str_t     file;
     ngx_str_t     params_tag;
     ngx_str_t     filter;
@@ -126,6 +127,13 @@ static ngx_command_t ngx_http_zookeeper_upstream_commands[] = {
       ngx_conf_set_str_slot,
       NGX_HTTP_SRV_CONF_OFFSET,
       offsetof(ngx_http_zookeeper_upstream_srv_conf_t, lock),
+      NULL },
+
+    { ngx_string("zookeeper_sync_lock_temporary"),
+      NGX_HTTP_UPS_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_flag_slot,
+      NGX_HTTP_SRV_CONF_OFFSET,
+      offsetof(ngx_http_zookeeper_upstream_srv_conf_t, lock_ephemeral),
       NULL },
 
     { ngx_string("zookeeper_sync_file"),
@@ -241,6 +249,7 @@ ngx_http_zookeeper_upstream_create_srv_conf(ngx_conf_t *cf)
 
     ngx_str_set(&zscf->params_tag, "@params");
     zscf->path = NGX_CONF_UNSET_PTR;
+    zscf->lock_ephemeral = NGX_CONF_UNSET;
     zscf->exclude = ngx_array_create(cf->pool, 1, sizeof(ngx_str_t));
     if (zscf->exclude == NULL)
         return NULL;
@@ -1501,7 +1510,7 @@ ensure_zpath_ready(int rc, const char *dummy, const void *ctx)
 
 
 static void
-ensure_zpath(const ngx_str_t *path)
+ensure_zpath(const ngx_str_t *path, ngx_flag_t ephemeral)
 {
     u_char     *s2;
     ngx_str_t  *sub;
@@ -1523,7 +1532,7 @@ ensure_zpath(const ngx_str_t *path)
             ngx_memcpy(sub->data, path->data, sub->len);
 
             zoo_acreate(zoo.handle, (const char *) sub->data, "", 0,
-                &ZOO_OPEN_ACL_UNSAFE, 0, ensure_zpath_ready, sub);
+                &ZOO_OPEN_ACL_UNSAFE, ephemeral == 1 && *s2 == 0 ? ZOO_EPHEMERAL : 0, ensure_zpath_ready, sub);
         }
     }
 
@@ -1550,7 +1559,7 @@ ensure_lock_path_ready(int rc, const struct Stat *dummy,
     if (rc == ZNONODE) {
 
         zscf->busy = 0;
-        return ensure_zpath(&zscf->lock_path);
+        return ensure_zpath(&zscf->lock_path, zscf->lock_ephemeral);
     }
 
     ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0,
