@@ -1859,6 +1859,10 @@ zookeeper_sync_unlock_upstream(ngx_http_request_t *r, ngx_flag_t local,
 
     zmcf = ngx_http_get_module_main_conf(r, ngx_zookeeper_upstream_module);
 
+    if (zscf->lock.data == NULL) {
+      return NGX_HTTP_NO_CONTENT;
+    }
+
     pool = ngx_create_pool(2048, ngx_cycle->log);
     if (pool == NULL)
         goto nomem;
