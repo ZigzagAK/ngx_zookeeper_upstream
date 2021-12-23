@@ -21,8 +21,8 @@ DIR="$(pwd)"
 DIAG_DIR="diag"
 VCS_PATH=${DIR%/*/*}
 
-VERSION="1.17.6"
-ZOO_VERSION="3.5.5"
+VERSION="1.20.1"
+ZOO_VERSION="3.5.9"
 PCRE_VERSION="8.40"
 ZLIB_VERSION="1.2.11"
 
@@ -202,7 +202,9 @@ function build_zlib() {
 
 function build_zoo() {
   echo "Build Zookeeper" | tee -a $BUILD_LOG
-  cd apache-zookeeper-$ZOO_VERSION/zookeeper-client/zookeeper-client-c
+  cd apache-zookeeper-$ZOO_VERSION
+  ant compile_jute
+  cd zookeeper-client/zookeeper-client-c
   autoreconf -if >> $BUILD_LOG 2>>$ERR_LOG
   ./configure --without-cppunit --prefix="$ZOO_PREFIX" --enable-shared --disable-static --libdir "$ZOO_PREFIX/lib" >> $BUILD_LOG 2>>$ERR_LOG
   make -j 8 >> $BUILD_LOG 2>>$ERR_LOG
@@ -316,7 +318,7 @@ function download() {
   cd src
 
   download_dep http://nginx.org/download                                           nginx            $VERSION           tar.gz
-  download_dep http://www-us.apache.org/dist/zookeeper/zookeeper-$ZOO_VERSION      apache-zookeeper $ZOO_VERSION       tar.gz
+  download_dep http://mirror.linux-ia64.org/apache/zookeeper/zookeeper-$ZOO_VERSION apache-zookeeper $ZOO_VERSION       tar.gz
   download_dep http://ftp.cs.stanford.edu/pub/exim/pcre                            pcre             $PCRE_VERSION      tar.gz
   download_dep http://zlib.net                                                     zlib             $ZLIB_VERSION      tar.gz
 

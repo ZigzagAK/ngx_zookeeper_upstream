@@ -712,6 +712,7 @@ ngx_zookeeper_upstream_save(ngx_http_zookeeper_upstream_srv_conf_t *zscf)
         ngx_rwlock_unlock(&primary->rwlock);
         ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, ngx_errno,
                       ngx_open_file_n " \"%V\" failed", &zscf->file);
+        ngx_destroy_pool(pool);
         return;
     }
 
@@ -784,6 +785,8 @@ end:
     ngx_close_file(file.fd);
 
     ngx_rwlock_unlock(&primary->rwlock);
+
+    ngx_destroy_pool(pool);
 
     return;
 
