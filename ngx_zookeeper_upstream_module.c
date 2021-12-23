@@ -1086,7 +1086,8 @@ ngx_zookeeper_ctx_deref(ngx_zookeeper_path_ctx_t *ctx)
 
     if (ctx->zscf->lock.data == NULL) {
 
-        ctx->zscf->epoch = zoo.epoch;
+        if (ctx->zscf->epoch >= 0)
+            ctx->zscf->epoch = zoo.epoch;
         goto cleanup;
     }
 
@@ -1597,6 +1598,7 @@ ngx_zookeeper_sync_update(ngx_http_zookeeper_upstream_srv_conf_t *zscf)
 
     if (zscf->busy) {
 
+        zscf->epoch = -1;
         ngx_rwlock_unlock(&zscf->rwlock);
         return NGX_OK;
     }
