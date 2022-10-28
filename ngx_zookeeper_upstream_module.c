@@ -705,6 +705,7 @@ ngx_zookeeper_upstream_save(ngx_http_zookeeper_upstream_srv_conf_t *zscf)
 
     file.name = zscf->file;
     file.offset = 0;
+    file.log = ngx_cycle->log;
  
     file.fd = ngx_open_file(zscf->file.data, NGX_FILE_WRONLY,
                             NGX_FILE_TRUNCATE, NGX_FILE_DEFAULT_ACCESS);
