@@ -50,6 +50,7 @@ __DATA__
     zookeeper_upstream                  127.0.0.1:$TEST_NGINX_ZOOKEEPER_PORT;
     zookeeper_upstream_log_level        debug;
     zookeeper_upstream_recv_timeout     5000;
+    zookeeper_upstream_workers          1;
 
     upstream simple1 {
       zone shm_simple1 128k;

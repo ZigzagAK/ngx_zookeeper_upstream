@@ -48,6 +48,7 @@ typedef struct
     ngx_int_t     timeout;
     ZooLogLevel   log_level;
     ngx_array_t  *exclude;
+    ngx_int_t     num_workers;
 } ngx_http_zookeeper_upstream_main_conf_t;
 
 
@@ -84,6 +85,12 @@ static ngx_conf_num_bounds_t  ngx_http_zookeeper_check_timeout = {
 };
 
 
+static ngx_conf_num_bounds_t  ngx_http_zookeeper_check_num_workers = {
+    ngx_conf_check_num_bounds,
+    1, 1024
+};
+
+
 static char *
 zookeeper_sync_unlock(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 
@@ -107,6 +114,13 @@ static ngx_command_t ngx_http_zookeeper_upstream_commands[] = {
       0,
       0,
       NULL },
+
+    { ngx_string("zookeeper_upstream_workers"),
+      NGX_HTTP_MAIN_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_num_slot,
+      NGX_HTTP_MAIN_CONF_OFFSET,
+      offsetof(ngx_http_zookeeper_upstream_main_conf_t, num_workers),
+      &ngx_http_zookeeper_check_num_workers },
 
     { ngx_string("zookeeper_upstream_recv_timeout"),
       NGX_HTTP_MAIN_CONF|NGX_CONF_TAKE1,
@@ -232,6 +246,7 @@ ngx_http_zookeeper_upstream_create_main_conf(ngx_conf_t *cf)
     zmcf->exclude = ngx_array_create(cf->pool, 1, sizeof(ngx_str_t));
     if (zmcf->exclude == NULL)
         return NULL;
+    zmcf->num_workers = NGX_CONF_UNSET;
 
     return zmcf;
 }
@@ -811,11 +826,23 @@ static ngx_int_t
 ngx_http_zookeeper_upstream_post_conf(ngx_conf_t *cf)
 {
     ngx_http_zookeeper_upstream_main_conf_t  *zmcf;
+    ngx_core_conf_t                          *ccf;
 
     zmcf = ngx_http_conf_get_module_main_conf(cf,
         ngx_zookeeper_upstream_module);
 
     ngx_conf_init_value(zmcf->timeout, 10000);
+
+    ccf = (ngx_core_conf_t *) ngx_get_conf(cf->cycle->conf_ctx,
+                                           ngx_core_module);
+
+    if (zmcf->num_workers == NGX_CONF_UNSET)
+        zmcf->num_workers = ccf->worker_processes;
+    else
+        zmcf->num_workers = ngx_min(zmcf->num_workers, ccf->worker_processes);
+
+    ngx_log_error(NGX_LOG_INFO, cf->log, 0,
+                  "Zookeeper upstream: %d workers will be used", zmcf->num_workers);
 
     return NGX_OK;
 }
@@ -830,6 +857,9 @@ ngx_http_zookeeper_upstream_init_worker(ngx_cycle_t *cycle)
         ngx_zookeeper_upstream_module);
 
     if (ngx_process != NGX_PROCESS_WORKER && ngx_process != NGX_PROCESS_SINGLE)
+        return NGX_OK;
+
+    if ((ngx_int_t) ngx_worker + 1 > zmcf->num_workers)
         return NGX_OK;
 
     ngx_log_error(NGX_LOG_INFO, cycle->log, 0,
@@ -1638,15 +1668,15 @@ ngx_zookeeper_sync_update(ngx_http_zookeeper_upstream_srv_conf_t *zscf)
 static ngx_int_t
 ngx_zookeeper_sync_upstreams()
 {
-    ngx_core_conf_t                          *ccf;
     ngx_http_upstream_main_conf_t            *umcf;
     ngx_http_upstream_srv_conf_t            **uscf;
     ngx_http_zookeeper_upstream_srv_conf_t   *zscf;
     ngx_uint_t                                j;
     ngx_str_t                                *lock;
+    ngx_http_zookeeper_upstream_main_conf_t  *zmcf;
 
-    ccf = (ngx_core_conf_t *) ngx_get_conf(ngx_cycle->conf_ctx,
-                                           ngx_core_module);
+    zmcf = ngx_http_cycle_get_module_main_conf(ngx_cycle,
+        ngx_zookeeper_upstream_module);
 
     umcf = ngx_http_cycle_get_module_main_conf(ngx_cycle,
         ngx_http_upstream_module);
@@ -1699,7 +1729,7 @@ ngx_zookeeper_sync_upstreams()
         if (zscf->uscf == NULL)
             continue;
 
-        if (j % ccf->worker_processes == ngx_worker)
+        if (j % zmcf->num_workers == ngx_worker)
             ngx_zookeeper_sync_update(zscf);
     }
 
