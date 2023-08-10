@@ -1005,7 +1005,8 @@ ngx_zookeeper_sync_watch(zhandle_t *zh, int type,
 
         ngx_log_error(NGX_LOG_INFO, ngx_cycle->log, 0,
                       "Zookeeper upstream: [%V] changed", &zscf->uscf->host);
-        zscf->epoch = 0;
+
+        zscf->epoch = zscf->busy ? -1 : 0;
         ngx_zookeeper_sync_update(zscf);
     }
 }
@@ -1632,7 +1633,6 @@ ngx_zookeeper_sync_update(ngx_http_zookeeper_upstream_srv_conf_t *zscf)
 
     if (zscf->busy) {
 
-        zscf->epoch = -1;
         ngx_rwlock_unlock(&zscf->rwlock);
         return NGX_OK;
     }
