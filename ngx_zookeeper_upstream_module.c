@@ -1419,7 +1419,7 @@ ngx_zookeeper_sync_upstream(ngx_http_zookeeper_upstream_srv_conf_t *zscf)
     ngx_str_t                 *path;
     ngx_uint_t                 j;
     ngx_zookeeper_path_ctx_t  *ctx;
-    ngx_atomic_t              *count;
+    ngx_atomic_t              *count = NULL;
     ngx_pool_t                *pool;
     ngx_array_t               *names;
 
