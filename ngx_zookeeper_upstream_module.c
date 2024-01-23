@@ -1424,14 +1424,13 @@ ngx_zookeeper_sync_upstream(ngx_http_zookeeper_upstream_srv_conf_t *zscf)
     ngx_array_t               *names;
 
     path = zscf->path->elts;
-    count = ngx_calloc(sizeof(ngx_atomic_t), ngx_cycle->log);
 
     pool = ngx_create_pool(1024, ngx_cycle->log);
     if (pool == NULL)
         goto nomem;
 
     count = ngx_pcalloc(pool, sizeof(ngx_atomic_t));
-    if (pool == NULL)
+    if (count == NULL)
         goto nomem;
 
     names = ngx_array_create(pool, 100, sizeof(ngx_str_t));
@@ -1551,6 +1550,7 @@ ensure_zpath(const ngx_str_t *path)
 {
     u_char     *s2;
     ngx_str_t  *sub;
+    int         rc;
 
     for (s2 = path->data + 1;
          s2 <= path->data + path->len;
@@ -1562,13 +1562,23 @@ ensure_zpath(const ngx_str_t *path)
             if (sub == NULL)
                 goto nomem;
             sub->data = ngx_calloc(s2 - path->data + 1, ngx_cycle->log);
-            if (sub->data == NULL)
+            if (sub->data == NULL) {
+                ngx_free(sub);
                 goto nomem;
+            }
             sub->len = s2 - path->data;
             ngx_memcpy(sub->data, path->data, sub->len);
 
-            zoo_acreate(zoo.handle, (const char *) sub->data, "", 0,
+            rc = zoo_acreate(zoo.handle, (const char *) sub->data, "", 0,
                 &ZOO_OPEN_ACL_UNSAFE, 0, ensure_zpath_ready, sub);
+            if (rc != ZOK) {
+                ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0,
+                              "Zookeeper upstream: error create path: %V, %s",
+                              (const char *) sub->data, zerror(rc));
+                ngx_free(sub->data);
+                ngx_free(sub);
+                break;
+            }
         }
     }
 
