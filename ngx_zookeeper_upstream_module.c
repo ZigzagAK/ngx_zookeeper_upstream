@@ -1574,7 +1574,7 @@ ensure_zpath(const ngx_str_t *path)
             if (rc != ZOK) {
                 ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0,
                               "Zookeeper upstream: error create path: %V, %s",
-                              (const char *) sub->data, zerror(rc));
+                              sub, zerror(rc));
                 ngx_free(sub->data);
                 ngx_free(sub);
                 break;
