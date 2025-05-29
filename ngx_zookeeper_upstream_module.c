@@ -1428,7 +1428,7 @@ ngx_zookeeper_sync_upstream_childrens(int rc, const struct String_vector *names,
 
         if (ctx->zscf->lock.data == NULL)
             rc = zoo_awget(zoo.handle, (const char *) gctx->node,
-                NULL, NULL,
+                ngx_zookeeper_sync_watch, ctx->zscf,
                 ngx_zookeeper_sync_upstream_host, gctx);
         else
             rc = zoo_aget(zoo.handle, (const char *) gctx->node,
